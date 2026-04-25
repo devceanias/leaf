@@ -1,0 +1,236 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Sat, 25 Apr 2026 23:08:29 +1000
+Subject: [PATCH] optimise player chunk loader queue updates
+
+
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/player/RegionizedPlayerChunkLoader.java b/ca/spottedleaf/moonrise/patches/chunk_system/player/RegionizedPlayerChunkLoader.java
+index edca39ac2046e400e97da78b0ef14721b9d618f4..befa77bc1b674c33085e52b4bbc090578b91ed14 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/player/RegionizedPlayerChunkLoader.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/player/RegionizedPlayerChunkLoader.java
+@@ -399,6 +399,14 @@ public final class RegionizedPlayerChunkLoader {
+         private final LongHeapPriorityQueue loadingQueue = new LongHeapPriorityQueue(CLOSEST_MANHATTAN_DIST);
+         private final LongHeapPriorityQueue loadQueue = new LongHeapPriorityQueue(CLOSEST_MANHATTAN_DIST);
+ 
++        private final Long2ByteOpenHashMap sendNeighbourCache = new Long2ByteOpenHashMap();
++        private final Long2ByteOpenHashMap tickNeighbourCache = new Long2ByteOpenHashMap();
++
++        {
++            sendNeighbourCache.defaultReturnValue((byte) 0);
++            tickNeighbourCache.defaultReturnValue((byte) 0);
++        }
++
+         private volatile boolean removed;
+         private final org.dreeam.leaf.async.chunk.AsyncChunkSender asyncSender = org.dreeam.leaf.config.modules.async.AsyncChunkSend.enabled ? new org.dreeam.leaf.async.chunk.AsyncChunkSender() : null; // Leaf - async chunk sender
+ 
+@@ -728,6 +736,21 @@ public final class RegionizedPlayerChunkLoader {
+             return true;
+         }
+ 
++        private boolean areNeighboursGenerated(final int chunkX, final int chunkZ, final int radius, final Long2ByteOpenHashMap cache) {
++            final long chunk = CoordinateUtils.getChunkKey(chunkX, chunkZ);
++            final byte cached = cache.get(chunk);
++
++            if (cached != 0) {
++                return cached == 1;
++            }
++
++            final boolean generated = this.areNeighboursGenerated(chunkX, chunkZ, radius);
++
++            cache.put(chunk, generated ? (byte) 1 : (byte) 2);
++
++            return generated;
++        }
++
+         void updateQueues(final long time) {
+             TickThread.ensureTickThread(this.player, "Cannot tick player chunk loader async");
+             if (this.removed) {
+@@ -742,12 +765,31 @@ public final class RegionizedPlayerChunkLoader {
+             this.chunkGenerateTicketLimiter.tickAllocation(time, genRate, genRate);
+             this.chunkSendLimiter.tickAllocation(time, sendRate, sendRate);
+ 
++            if (sendQueue.isEmpty() &&
++                tickingQueue.isEmpty() &&
++                generatingQueue.isEmpty() &&
++                genQueue.isEmpty() &&
++                loadingQueue.isEmpty() &&
++                loadQueue.isEmpty() &&
++                delayedTicketOps.isEmpty() &&
++                (asyncSender == null || asyncSender.idle())
++            ) {
++                return;
++            }
++
++            sendNeighbourCache.clear();
++            tickNeighbourCache.clear();
++
++            final ChunkTaskScheduler scheduler = ((ChunkSystemServerLevel) this.world).moonrise$getChunkTaskScheduler();
++            final ChunkHolderManager chunkHolderManager = scheduler.chunkHolderManager;
++
+             // try to progress chunk loads
+             while (!this.loadingQueue.isEmpty()) {
+                 final long pendingLoadChunk = this.loadingQueue.firstLong();
+                 final int pendingChunkX = CoordinateUtils.getChunkX(pendingLoadChunk);
+                 final int pendingChunkZ = CoordinateUtils.getChunkZ(pendingLoadChunk);
+                 final ChunkAccess pending = ((ChunkSystemLevel)this.world).moonrise$getAnyChunkIfLoaded(pendingChunkX, pendingChunkZ);
++
+                 if (pending == null) {
+                     // nothing to do here
+                     break;
+@@ -757,6 +799,7 @@ public final class RegionizedPlayerChunkLoader {
+ 
+                 // try to move to generate queue
+                 final byte prev = this.chunkTicketStage.put(pendingLoadChunk, CHUNK_TICKET_STAGE_LOADED);
++
+                 if (prev != CHUNK_TICKET_STAGE_LOADING) {
+                     throw new IllegalStateException("Previous state should be " + CHUNK_TICKET_STAGE_LOADING + ", not " + prev);
+                 }
+@@ -769,11 +812,14 @@ public final class RegionizedPlayerChunkLoader {
+             // try to push more chunk loads
+             final long maxLoads = Math.max(0L, Math.min(MAX_RATE, Math.min(this.loadQueue.size(), this.getMaxChunkLoads())));
+             final int maxLoadsThisTick = (int)this.chunkLoadTicketLimiter.takeAllocation(time, loadRate, maxLoads);
++
+             if (maxLoadsThisTick > 0) {
+                 final LongArrayList chunks = new LongArrayList(maxLoadsThisTick);
++
+                 for (int i = 0; i < maxLoadsThisTick; ++i) {
+                     final long chunk = this.loadQueue.dequeueLong();
+                     final byte prev = this.chunkTicketStage.put(chunk, CHUNK_TICKET_STAGE_LOADING);
++
+                     if (prev != CHUNK_TICKET_STAGE_NONE) {
+                         throw new IllegalStateException("Previous state should be " + CHUNK_TICKET_STAGE_NONE + ", not " + prev);
+                     }
+@@ -792,7 +838,7 @@ public final class RegionizedPlayerChunkLoader {
+                 // load - only generate ticket levels start anything, but they start generation...
+                 // propagate levels
+                 // Note: this CAN call plugin logic, so it is VITAL that our bookkeeping logic is completely done by the time this is invoked
+-                ((ChunkSystemServerLevel)this.world).moonrise$getChunkTaskScheduler().chunkHolderManager.processTicketUpdates();
++                chunkHolderManager.processTicketUpdates();
+ 
+                 if (this.removed) {
+                     // process ticket updates may invoke plugin logic, which may remove this player
+@@ -803,7 +849,8 @@ public final class RegionizedPlayerChunkLoader {
+                     final long queuedLoadChunk = chunks.getLong(i);
+                     final int queuedChunkX = CoordinateUtils.getChunkX(queuedLoadChunk);
+                     final int queuedChunkZ = CoordinateUtils.getChunkZ(queuedLoadChunk);
+-                    ((ChunkSystemServerLevel)this.world).moonrise$getChunkTaskScheduler().scheduleChunkLoad(
++
++                    scheduler.scheduleChunkLoad(
+                         queuedChunkX, queuedChunkZ, ChunkStatus.EMPTY, false, Priority.NORMAL, null
+                     );
+                     if (this.removed) {
+@@ -818,6 +865,7 @@ public final class RegionizedPlayerChunkLoader {
+                 final int pendingChunkX = CoordinateUtils.getChunkX(pendingGenChunk);
+                 final int pendingChunkZ = CoordinateUtils.getChunkZ(pendingGenChunk);
+                 final LevelChunk pending = ((ChunkSystemLevel)this.world).moonrise$getFullChunkIfLoaded(pendingChunkX, pendingChunkZ);
++
+                 if (pending == null) {
+                     // nothing to do here
+                     break;
+@@ -827,6 +875,7 @@ public final class RegionizedPlayerChunkLoader {
+                 this.generatingQueue.dequeueLong();
+ 
+                 final byte prev = this.chunkTicketStage.put(pendingGenChunk, CHUNK_TICKET_STAGE_GENERATED);
++
+                 if (prev != CHUNK_TICKET_STAGE_GENERATING) {
+                     throw new IllegalStateException("Previous state should be " + CHUNK_TICKET_STAGE_GENERATING + ", not " + prev);
+                 }
+@@ -845,12 +894,15 @@ public final class RegionizedPlayerChunkLoader {
+             final long maxGens = Math.max(0L, Math.min(MAX_RATE, Math.min(this.genQueue.size(), this.getMaxChunkGenerates())));
+             // preview the allocations, as we may not actually utilise all of them
+             final long maxGensThisTick = this.chunkGenerateTicketLimiter.previewAllocation(time, genRate, maxGens);
++
+             long ratedGensThisTick = 0L;
++
+             while (!this.genQueue.isEmpty()) {
+                 final long chunkKey = this.genQueue.firstLong();
+                 final int chunkX = CoordinateUtils.getChunkX(chunkKey);
+                 final int chunkZ = CoordinateUtils.getChunkZ(chunkKey);
+                 final ChunkAccess chunk = ((ChunkSystemLevel)this.world).moonrise$getAnyChunkIfLoaded(chunkX, chunkZ);
++
+                 if (chunk.getPersistedStatus() != ChunkStatus.FULL) {
+                     // only rate limit actual generations
+                     if ((ratedGensThisTick + 1L) > maxGensThisTick) {
+@@ -862,6 +914,7 @@ public final class RegionizedPlayerChunkLoader {
+                 this.genQueue.dequeueLong();
+ 
+                 final byte prev = this.chunkTicketStage.put(chunkKey, CHUNK_TICKET_STAGE_GENERATING);
++
+                 if (prev != CHUNK_TICKET_STAGE_LOADED) {
+                     throw new IllegalStateException("Previous state should be " + CHUNK_TICKET_STAGE_LOADED + ", not " + prev);
+                 }
+@@ -883,8 +936,11 @@ public final class RegionizedPlayerChunkLoader {
+                 final int pendingChunkX = CoordinateUtils.getChunkX(pendingTicking);
+                 final int pendingChunkZ = CoordinateUtils.getChunkZ(pendingTicking);
+ 
+-                if (!this.areNeighboursGenerated(pendingChunkX, pendingChunkZ,
+-                    ChunkHolderManager.FULL_LOADED_TICKET_LEVEL - ChunkHolderManager.ENTITY_TICKING_TICKET_LEVEL)) {
++                if (!this.areNeighboursGenerated(
++                    pendingChunkX, pendingChunkZ,
++                    ChunkHolderManager.FULL_LOADED_TICKET_LEVEL - ChunkHolderManager.ENTITY_TICKING_TICKET_LEVEL,
++                    this.tickNeighbourCache
++                )) {
+                     break;
+                 }
+ 
+@@ -899,6 +955,7 @@ public final class RegionizedPlayerChunkLoader {
+                 );
+                 // note: there is no queue to add after ticking
+                 final byte prev = this.chunkTicketStage.put(pendingTicking, CHUNK_TICKET_STAGE_TICK);
++
+                 if (prev != CHUNK_TICKET_STAGE_GENERATED) {
+                     throw new IllegalStateException("Previous state should be " + CHUNK_TICKET_STAGE_GENERATED + ", not " + prev);
+                 }
+@@ -907,13 +964,16 @@ public final class RegionizedPlayerChunkLoader {
+             // try to pull sending chunks
+             final long maxSends = Math.max(0L, Math.min(MAX_RATE, Integer.MAX_VALUE)); // note: no logic to track concurrent sends
+             final int maxSendsThisTick = Math.min((int)this.chunkSendLimiter.takeAllocation(time, sendRate, maxSends), this.sendQueue.size());
++
+             // we do not return sends that we took from the allocation back because we want to limit the max send rate, not target it
+             for (int i = 0; i < maxSendsThisTick; ++i) {
+                 final long pendingSend = this.sendQueue.firstLong();
+                 final int pendingSendX = CoordinateUtils.getChunkX(pendingSend);
+                 final int pendingSendZ = CoordinateUtils.getChunkZ(pendingSend);
+                 final LevelChunk chunk = ((ChunkSystemLevel)this.world).moonrise$getFullChunkIfLoaded(pendingSendX, pendingSendZ);
+-                if (!this.areNeighboursGenerated(pendingSendX, pendingSendZ, 1) || !TickThread.isTickThreadFor(this.world, pendingSendX, pendingSendZ)) {
++
++                if (!this.areNeighboursGenerated(pendingSendX, pendingSendZ, 1, this.sendNeighbourCache)
++                    || !TickThread.isTickThreadFor(this.world, pendingSendX, pendingSendZ)) {
+                     // nothing to do
+                     // the target chunk may not be owned by this region, but this should be resolved in the future
+                     break;
+@@ -949,6 +1009,7 @@ public final class RegionizedPlayerChunkLoader {
+             // Leaf start - async chunk sender
+             if (this.asyncSender != null) {
+                 net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket packet;
++
+                 while ((packet = this.asyncSender.recv()) != null) {
+                     if (this.asyncSender.remove(CoordinateUtils.getChunkKey(packet.getX(), packet.getZ()))) {
+                         this.leaf$sendChunkRaw(packet);
+@@ -1041,6 +1102,12 @@ public final class RegionizedPlayerChunkLoader {
+             final int prevChunkX = this.lastChunkX;
+             final int prevChunkZ = this.lastChunkZ;
+ 
++            final boolean teleported = prevChunkX != Integer.MIN_VALUE
++                && prevChunkZ != Integer.MIN_VALUE
++                && lastLoadDistance != Integer.MIN_VALUE
++                && Math.max(Math.abs(currentChunkX - prevChunkX), Math.abs(currentChunkZ - prevChunkZ))
++                > (2 * Math.max(loadViewDistance, lastLoadDistance));
++
+             if (
+                 // has view distance stayed the same?
+                 sendViewDistance == this.lastSendDistance
+@@ -1082,6 +1149,13 @@ public final class RegionizedPlayerChunkLoader {
+             this.loadingQueue.clear();
+             this.loadQueue.clear();
+ 
++            sendNeighbourCache.clear();
++            tickNeighbourCache.clear();
++
++            if (teleported && asyncSender != null) {
++                asyncSender.clear();
++            }
++
+             this.lastChunkX = currentChunkX;
+             this.lastChunkZ = currentChunkZ;
+             this.lastSendDistance = sendViewDistance;

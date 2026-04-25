@@ -39,6 +39,10 @@ public final class AsyncChunkSender {
         while (recv() != null) ;
     }
 
+    public boolean idle() {
+        return size <= 0 && pending.isEmpty();
+    }
+
     public void submit(Supplier<ClientboundLevelChunkWithLightPacket> task) {
         size++;
         AsyncChunkSend.POOL.submit(() -> {
@@ -48,7 +52,12 @@ public final class AsyncChunkSender {
     }
 
     public @Nullable ClientboundLevelChunkWithLightPacket recv() {
-        size--;
-        return this.channel.recv();
+        final ClientboundLevelChunkWithLightPacket packet = channel.recv();
+
+        if (packet != null) {
+            --size;
+        }
+
+        return packet;
     }
 }
