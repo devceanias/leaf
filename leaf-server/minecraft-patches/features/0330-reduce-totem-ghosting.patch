@@ -1,0 +1,55 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Sun, 26 Apr 2026 02:45:51 +1000
+Subject: [PATCH] reduce totem ghosting
+
+
+diff --git a/net/minecraft/world/entity/LivingEntity.java b/net/minecraft/world/entity/LivingEntity.java
+index 1a038a29eef12bf9b176e8beb4a897be006df637..c4b050c5fbb9e7f36b4b2e620b3271475b05ab1f 100644
+--- a/net/minecraft/world/entity/LivingEntity.java
++++ b/net/minecraft/world/entity/LivingEntity.java
+@@ -46,6 +46,7 @@ import net.minecraft.network.protocol.game.ClientboundAnimatePacket;
+ import net.minecraft.network.protocol.game.ClientboundEntityEventPacket;
+ import net.minecraft.network.protocol.game.ClientboundRemoveMobEffectPacket;
+ import net.minecraft.network.protocol.game.ClientboundSetEquipmentPacket;
++import net.minecraft.network.protocol.game.ClientboundSetHealthPacket;
+ import net.minecraft.network.protocol.game.ClientboundTakeItemEntityPacket;
+ import net.minecraft.network.protocol.game.ClientboundUpdateMobEffectPacket;
+ import net.minecraft.network.syncher.EntityDataAccessor;
+@@ -139,6 +140,7 @@ import net.minecraft.world.scores.PlayerTeam;
+ import net.minecraft.world.scores.Scoreboard;
+ import net.minecraft.world.waypoints.Waypoint;
+ import net.minecraft.world.waypoints.WaypointTransmitter;
++import org.dreeam.leaf.config.modules.opt.ReduceTotemGhosting;
+ import org.jetbrains.annotations.Contract;
+ import org.jspecify.annotations.Nullable;
+ import org.slf4j.Logger;
+@@ -1905,12 +1907,23 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+                     itemStack.causeUseVibration(this, GameEvent.ITEM_INTERACT_FINISH);
+                 }
+ 
+-                this.setHealth(1.0F);
+-                deathProtection.applyEffects(itemStack, this);
+-                this.level().broadcastEntityEvent(this, EntityEvent.PROTECTED_FROM_DEATH);
+-            }
++                  this.setHealth(1.0F);
++
++                  deathProtection.applyEffects(itemStack, this);
++
++                  this.level().broadcastEntityEvent(this, EntityEvent.PROTECTED_FROM_DEATH);
++
++                  if (ReduceTotemGhosting.enabled && this instanceof final ServerPlayer serverPlayer1) {
++                      serverPlayer1.connection.send(new ClientboundSetHealthPacket(serverPlayer1.getBukkitEntity().getScaledHealth(), serverPlayer1.getFoodData().getFoodLevel(), serverPlayer1.getFoodData().getSaturationLevel()));
++                      serverPlayer1.containerMenu.broadcastChanges();
++
++                      if (serverPlayer1.containerMenu != serverPlayer1.inventoryMenu) {
++                          serverPlayer1.inventoryMenu.broadcastNonContainerSlotChanges();
++                      }
++                  }
++              }
+ 
+-            return deathProtection != null;
++              return deathProtection != null;
+         }
+     }
+ 
