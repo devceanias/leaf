@@ -1,0 +1,19 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Sat, 25 Apr 2026 21:03:57 +1000
+Subject: [PATCH] throttle waypoint updates
+
+
+diff --git a/net/minecraft/world/entity/Entity.java b/net/minecraft/world/entity/Entity.java
+index d05e653fa5bb9273b791bd9b21695ca44b9c3c5d..4575c9664f294247749e982f8426c23966be4b0f 100644
+--- a/net/minecraft/world/entity/Entity.java
++++ b/net/minecraft/world/entity/Entity.java
+@@ -5311,7 +5311,7 @@ public abstract class Entity implements SyncedDataHolder, DebugValueSource, Name
+             }
+ 
+             this.levelCallback.onMove();
+-            if ((!org.dreeam.leaf.config.modules.opt.OptimizeWaypoint.enabled || blockUpdated) && !this.firstTick && this.level instanceof ServerLevel serverLevel && !this.isRemoved()) { // Leaf - optimize waypoint
++            if ((!org.dreeam.leaf.config.modules.opt.OptimizeWaypoint.enabled || blockUpdated || tickCount % 3 == 0) && !this.firstTick && this.level instanceof ServerLevel serverLevel && !this.isRemoved()) { // Leaf - optimize waypoint
+                 if (this instanceof WaypointTransmitter waypointTransmitter && waypointTransmitter.isTransmittingWaypoint()) {
+                     serverLevel.getWaypointManager().updateWaypoint(waypointTransmitter);
+                 }
