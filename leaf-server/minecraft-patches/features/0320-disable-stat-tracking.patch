@@ -1,0 +1,58 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Sat, 25 Apr 2026 21:09:56 +1000
+Subject: [PATCH] disable stat tracking
+
+
+diff --git a/net/minecraft/server/level/ServerPlayer.java b/net/minecraft/server/level/ServerPlayer.java
+index 1aa47d5f25de08114abd9a179999b9993e3f0ef4..a2f8370103f2a2103ef35f406eaeac7ea22769ef 100644
+--- a/net/minecraft/server/level/ServerPlayer.java
++++ b/net/minecraft/server/level/ServerPlayer.java
+@@ -2126,14 +2126,12 @@ public class ServerPlayer extends Player implements ca.spottedleaf.moonrise.patc
+ 
+     @Override
+     public void awardStat(Stat<?> stat, int amount) {
+-        this.stats.increment(this, stat, amount);
+-        this.level().getCraftServer().getScoreboardManager().forAllObjectives(stat, this, scoreAccess -> scoreAccess.add(amount)); // CraftBukkit - Get our scores instead
++        return;
+     }
+ 
+     @Override
+     public void resetStat(Stat<?> stat) {
+-        this.stats.setValue(this, stat, 0);
+-        this.level().getCraftServer().getScoreboardManager().forAllObjectives(stat, this, ScoreAccess::reset); // CraftBukkit - Get our scores instead
++        return;
+     }
+ 
+     @Override
+diff --git a/net/minecraft/stats/StatsCounter.java b/net/minecraft/stats/StatsCounter.java
+index 694faca9a16abd175b2dd321d132f69727d37e6e..a72ffcdcf75b651f62518c1e4c7ef11f1891bd11 100644
+--- a/net/minecraft/stats/StatsCounter.java
++++ b/net/minecraft/stats/StatsCounter.java
+@@ -13,18 +13,9 @@ public class StatsCounter {
+     }
+ 
+     public void increment(Player player, Stat<?> stat, int amount) {
+-        int i = (int)Math.min((long)this.getValue(stat) + amount, 2147483647L);
+-        // CraftBukkit start - fire Statistic events
+-        org.bukkit.event.Cancellable cancellable = org.bukkit.craftbukkit.event.CraftEventFactory.handleStatisticsIncrease(player, stat, this.getValue(stat), i);
+-        if (cancellable != null && cancellable.isCancelled()) {
+-            return;
+-        }
+-        // CraftBukkit end
+-        this.setValue(player, stat, i);
+     }
+ 
+     public void setValue(Player player, Stat<?> stat, int value) {
+-        this.stats.put(stat, value);
+     }
+ 
+     public <T> int getValue(StatType<T> type, T value) {
+@@ -32,6 +23,6 @@ public class StatsCounter {
+     }
+ 
+     public int getValue(Stat<?> stat) {
+-        return this.stats.getInt(stat);
++        return 0;
+     }
+ }
