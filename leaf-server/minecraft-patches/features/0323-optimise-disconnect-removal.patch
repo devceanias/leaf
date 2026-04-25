@@ -5,7 +5,7 @@ Subject: [PATCH] optimise disconnect removal
 
 
 diff --git a/ca/spottedleaf/moonrise/common/misc/NearbyPlayers.java b/ca/spottedleaf/moonrise/common/misc/NearbyPlayers.java
-index 499cad369242f9ad724b3251538d62d8dc8d2ec8..661a293306133712dfb15de9a4d0da6abeec5ded 100644
+index 499cad369242f9ad724b3251538d62d8dc8d2ec8..75b1e61f6081873130f49f93664d0a61e292f21b 100644
 --- a/ca/spottedleaf/moonrise/common/misc/NearbyPlayers.java
 +++ b/ca/spottedleaf/moonrise/common/misc/NearbyPlayers.java
 @@ -14,6 +14,7 @@ import net.minecraft.core.BlockPos;
@@ -49,7 +49,7 @@ index 499cad369242f9ad724b3251538d62d8dc8d2ec8..661a293306133712dfb15de9a4d0da6a
      public void clear() {
          if (this.players.isEmpty()) {
              return;
-@@ -238,6 +252,71 @@ public final class NearbyPlayers {
+@@ -238,6 +252,78 @@ public final class NearbyPlayers {
                  --this.nonEmptyLists;
              }
          }
@@ -115,7 +115,14 @@ index 499cad369242f9ad724b3251538d62d8dc8d2ec8..661a293306133712dfb15de9a4d0da6a
 +
 +                byChunk.remove(chunkKey);
 +
-+                ((ChunkSystemLevel) world).moonrise$releaseChunkData(chunkKey).nearbyPlayers = null;
++                final ChunkData result = ((ChunkSystemLevel) world).moonrise$releaseChunkData(chunkKey);
++
++                // This check is needed.
++                if (result == null) {
++                    continue;
++                }
++
++                result.nearbyPlayers = null;
 +            }
 +        }
      }
