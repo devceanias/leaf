@@ -1,0 +1,111 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Sun, 26 Apr 2026 01:56:45 +1000
+Subject: [PATCH] prevent unsafe ender pearl teleports
+
+
+diff --git a/net/minecraft/world/entity/projectile/throwableitemprojectile/ThrownEnderpearl.java b/net/minecraft/world/entity/projectile/throwableitemprojectile/ThrownEnderpearl.java
+index 2fe748ab39602b1f3d2c4f9982375e582806828c..e3f67101b7b6702eff18c3f64cf15a045fcb8b57 100644
+--- a/net/minecraft/world/entity/projectile/throwableitemprojectile/ThrownEnderpearl.java
++++ b/net/minecraft/world/entity/projectile/throwableitemprojectile/ThrownEnderpearl.java
+@@ -1,6 +1,7 @@
+ package net.minecraft.world.entity.projectile.throwableitemprojectile;
+ 
+ import java.util.UUID;
++import org.bukkit.event.entity.EntityRemoveEvent;
+ import net.minecraft.core.BlockPos;
+ import net.minecraft.core.SectionPos;
+ import net.minecraft.core.particles.ParticleTypes;
+@@ -23,9 +24,11 @@ import net.minecraft.world.level.block.Blocks;
+ import net.minecraft.world.level.block.state.BlockState;
+ import net.minecraft.world.level.gamerules.GameRules;
+ import net.minecraft.world.level.portal.TeleportTransition;
++import net.minecraft.world.phys.AABB;
+ import net.minecraft.world.phys.EntityHitResult;
+ import net.minecraft.world.phys.HitResult;
+ import net.minecraft.world.phys.Vec3;
++import org.dreeam.leaf.config.modules.opt.PreventPearlGlitch;
+ import org.jspecify.annotations.Nullable;
+ 
+ public class ThrownEnderpearl extends ThrowableItemProjectile {
+@@ -104,13 +107,21 @@ public class ThrownEnderpearl extends ThrowableItemProjectile {
+                 Vec3 vec3 = this.oldPosition();
+                 if (owner instanceof ServerPlayer serverPlayer) {
+                     if (serverPlayer.connection.isAcceptingMessages()) {
++                        final Vec3 target = PreventPearlGlitch.enabled ? findPearlTarget(serverPlayer, serverLevel, vec3) : vec3;
++
++                        if (target == null) {
++                            discard(EntityRemoveEvent.Cause.HIT);
++
++                            return;
++                        }
++
+                         // Leaf start - SparklyPaper - parallel world ticking - handling for pearl teleportation cross-dimension
+                         java.util.function.Consumer<ServerPlayer> teleportPlayerCrossDimensionTask = taskServerPlayer -> {
+                         // CraftBukkit start
+                         // Store pre teleportation position as the teleport has been moved up.
+                         final double preTeleportX = serverPlayer.getX(), preTeleportY = serverPlayer.getY(), preTeleportZ = serverPlayer.getZ();
+                         final float preTeleportYRot = serverPlayer.getYRot(), preTeleportXRot = serverPlayer.getXRot();
+-                        ServerPlayer serverPlayer1 = taskServerPlayer.teleport(new TeleportTransition(serverLevel, vec3, Vec3.ZERO, 0.0F, 0.0F, Relative.union(Relative.ROTATION, Relative.DELTA), TeleportTransition.DO_NOTHING, org.bukkit.event.player.PlayerTeleportEvent.TeleportCause.ENDER_PEARL));
++                        ServerPlayer serverPlayer1 = taskServerPlayer.teleport(new TeleportTransition(serverLevel, target, Vec3.ZERO, 0.0F, 0.0F, Relative.union(Relative.ROTATION, Relative.DELTA), TeleportTransition.DO_NOTHING, org.bukkit.event.player.PlayerTeleportEvent.TeleportCause.ENDER_PEARL));
+                         if (serverPlayer1 == null) {
+                             this.discard(org.bukkit.event.entity.EntityRemoveEvent.Cause.HIT);
+                             return;
+@@ -142,7 +153,7 @@ public class ThrownEnderpearl extends ThrowableItemProjectile {
+                             serverPlayer1.hurtServer(taskServerPlayer.level(), this.damageSources().enderPearl().eventEntityDamager(this), this.level().purpurConfig.enderPearlDamage); // CraftBukkit // Paper - fix DamageSource API // Purpur - Configurable Ender Pearl damage
+                         }
+ 
+-                        this.playSound(serverLevel, vec3);
++                        this.playSound(serverLevel, target);
+                         };
+                         if (org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled) {
+                             serverPlayer.getBukkitEntity().taskScheduler.schedule(teleportPlayerCrossDimensionTask, entity -> {
+@@ -178,6 +189,48 @@ public class ThrownEnderpearl extends ThrowableItemProjectile {
+         }
+     }
+ 
++    private @Nullable Vec3 findPearlTarget(final ServerPlayer player, final ServerLevel level, final Vec3 position) {
++        final BlockPos containing = BlockPos.containing(position);
++
++        Vec3 target = new Vec3(containing.getX() + 0.5D, containing.getY(), containing.getZ() + 0.5D);
++
++        if (level.getBlockState(containing.above()).is(Blocks.BARRIER)) {
++            target = findBarrierSafe(level, target);
++
++            if (target == null) {
++                return null;
++            }
++        }
++
++        return isTargetSafe(player, level, target) ? target : null;
++    }
++
++    private @Nullable Vec3 findBarrierSafe(final ServerLevel level, final Vec3 position) {
++        final BlockPos containing = BlockPos.containing(position);
++
++        final int x = containing.getX();
++        final int z = containing.getZ();
++
++        for (int y = containing.getY(); y >= level.getMinY(); y--) {
++            final BlockPos floorPosition = new BlockPos(x, y, z);
++            final BlockState floorState = level.getBlockState(floorPosition);
++
++            if (floorState.getCollisionShape(level, floorPosition).isEmpty() || floorState.is(Blocks.BARRIER)) {
++                continue;
++            }
++
++            return new Vec3(x + 0.5D, y + 1.0D, z + 0.5D);
++        }
++
++        return null;
++    }
++
++    private boolean isTargetSafe(final ServerPlayer player, final ServerLevel level, final Vec3 position) {
++        final AABB box = player.getDimensions(player.getPose()).makeBoundingBox(position).deflate(1.0E-7);
++
++        return level.noCollision(player, box);
++    }
++
+     @Override
+     public void tick() {
+         if (this.level() instanceof ServerLevel serverLevel) {
