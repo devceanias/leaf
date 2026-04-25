@@ -6,7 +6,6 @@ import org.dreeam.leaf.config.EnumConfigCategory;
 public class DisableChunkCacheThreadChecks extends ConfigModules {
     public static boolean enabled = false;
 
-    @Override
     public String getBasePath() {
         return EnumConfigCategory.PERF.getBaseKeyName() + ".disable-chunk-cache-thread-checks";
     }
