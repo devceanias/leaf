@@ -54,3 +54,21 @@ index 8e424b48c06e90893f0f2fde7c35410bd8271469..065135e72589f61c76ef9e778e6c25db
 +        return new RemoveData(chunkX, chunkZ, distance);
 +    }
  }
+diff --git a/src/main/java/org/bukkit/craftbukkit/CraftServer.java b/src/main/java/org/bukkit/craftbukkit/CraftServer.java
+index f1dd9c35371b231602b1dd94b218050296dcb6a2..d0f8f254bc7ea4ca5be79e30a94949c38e68cf60 100644
+--- a/src/main/java/org/bukkit/craftbukkit/CraftServer.java
++++ b/src/main/java/org/bukkit/craftbukkit/CraftServer.java
+@@ -3107,13 +3107,6 @@ public final class CraftServer implements Server {
+     }
+     // Purpur end - Bring back server name
+ 
+-    // Purpur start - Lagging threshold
+-    @Override
+-    public boolean isLagging() {
+-        return getServer().lagging;
+-    }
+-    // Purpur end - Lagging threshold
+-
+     // Gale start - YAPFA - last tick time - API
+     @Override
+     public long getLastTickTotalTime() {
