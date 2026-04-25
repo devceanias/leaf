@@ -4,6 +4,34 @@ Date: Sun, 26 Apr 2026 03:16:40 +1000
 Subject: [PATCH] add fakebright lighting
 
 
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/player/RegionizedPlayerChunkLoader.java b/ca/spottedleaf/moonrise/patches/chunk_system/player/RegionizedPlayerChunkLoader.java
+index befa77bc1b674c33085e52b4bbc090578b91ed14..e48233148489d5c4fae8be80cf1194a3ad1e0c2f 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/player/RegionizedPlayerChunkLoader.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/player/RegionizedPlayerChunkLoader.java
+@@ -469,13 +469,17 @@ public final class RegionizedPlayerChunkLoader {
+                 ((ChunkSystemChunkHolder)((ChunkSystemServerLevel)this.world).moonrise$getChunkTaskScheduler().chunkHolderManager
+                     .getChunkHolder(chunkX, chunkZ).vanillaChunkHolder).moonrise$addReceivedChunk(this.player);
+ 
+-                final LevelChunk chunk = ((ChunkSystemLevel)this.world).moonrise$getFullChunkIfLoaded(chunkX, chunkZ);
++                  final LevelChunk chunk = ((ChunkSystemLevel)this.world).moonrise$getFullChunkIfLoaded(chunkX, chunkZ);
+ 
+-                PlatformHooks.get().onChunkWatch(this.world, chunk, this.player);
+-                this.player.connection.send(chunkPacket);
+-                // Paper start - PlayerChunkLoadEvent
+-                if (io.papermc.paper.event.packet.PlayerChunkLoadEvent.getHandlerList().getRegisteredListeners().length > 0) {
+-                    new io.papermc.paper.event.packet.PlayerChunkLoadEvent(new org.bukkit.craftbukkit.CraftChunk(chunk), this.player.connection.getPlayer().getBukkitEntity()).callEvent();
++                  PlatformHooks.get().onChunkWatch(this.world, chunk, this.player);
++
++                  player.connection.send(chunkPacket);
++
++                  PlayerChunkSender.sendFakebright(this.player.connection, this.world, chunk.getPos());
++
++                  // Paper start - PlayerChunkLoadEvent
++                  if (io.papermc.paper.event.packet.PlayerChunkLoadEvent.getHandlerList().getRegisteredListeners().length > 0) {
++                      new io.papermc.paper.event.packet.PlayerChunkLoadEvent(new org.bukkit.craftbukkit.CraftChunk(chunk), this.player.connection.getPlayer().getBukkitEntity()).callEvent();
+                 }
+                 // Paper end - PlayerChunkLoadEvent
+                 // Leaf start - Multithreaded tracker
 diff --git a/ca/spottedleaf/moonrise/patches/starlight/light/StarLightEngine.java b/ca/spottedleaf/moonrise/patches/starlight/light/StarLightEngine.java
 index c6222bfb75706052df41d821f2fcfc4620ce3672..a364950c551ec8742f9ddfb6c9e2c9805ffe00fc 100644
 --- a/ca/spottedleaf/moonrise/patches/starlight/light/StarLightEngine.java
@@ -398,6 +426,41 @@ index cc5b6e5392cdd181b460dbc2200fcb2440310562..a66f3d5c47fdad909c266a132a2f03ab
              }
          } else {
              this.blockUpdates = EMPTY_ARRAY;
+diff --git a/net/minecraft/server/network/PlayerChunkSender.java b/net/minecraft/server/network/PlayerChunkSender.java
+index 342e7f6fbb53966c879b369ffde5fee5fc2f01ef..7977697719e41fc03f69935b73b0b3e81d148687 100644
+--- a/net/minecraft/server/network/PlayerChunkSender.java
++++ b/net/minecraft/server/network/PlayerChunkSender.java
+@@ -12,6 +12,7 @@ import net.minecraft.network.protocol.game.ClientboundChunkBatchFinishedPacket;
+ import net.minecraft.network.protocol.game.ClientboundChunkBatchStartPacket;
+ import net.minecraft.network.protocol.game.ClientboundForgetLevelChunkPacket;
+ import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
++import net.minecraft.network.protocol.game.ClientboundLightUpdatePacket;
+ import net.minecraft.server.level.ChunkMap;
+ import net.minecraft.server.level.ServerLevel;
+ import net.minecraft.server.level.ServerPlayer;
+@@ -82,6 +83,7 @@ public class PlayerChunkSender {
+         // Paper start - Anti-Xray
+         final boolean shouldModify = level.chunkPacketBlockController.shouldModify(packetListener.player, chunk);
+         packetListener.send(new ClientboundLevelChunkWithLightPacket(chunk, level.getLightEngine(), null, null, shouldModify));
++        sendFakebright(packetListener, level, chunk.getPos());
+         // Paper end - Anti-Xray
+         // Paper start - PlayerChunkLoadEvent
+         if (io.papermc.paper.event.packet.PlayerChunkLoadEvent.getHandlerList().getRegisteredListeners().length > 0) {
+@@ -112,6 +114,14 @@ public class PlayerChunkSender {
+     }
+     // Leaf end - async chunk sender
+ 
++    public static void sendFakebright(final ServerGamePacketListenerImpl listener, final ServerLevel level, final ChunkPos pos) {
++        if (!level.galeConfig().smallOptimizations.applyFakebright) {
++            return;
++        }
++
++        listener.send(new ClientboundLightUpdatePacket(pos, level.getLightEngine(), null, null));
++    }
++
+     private List<LevelChunk> collectChunksToSend(ChunkMap chunkMap, ChunkPos chunkPos) {
+         int floor = Mth.floor(this.batchQuota);
+         List<LevelChunk> list;
 diff --git a/net/minecraft/world/level/chunk/ChunkAccess.java b/net/minecraft/world/level/chunk/ChunkAccess.java
 index 6f55d5bb180531028cf9c9a2ad67da4585a13ef1..8b5dec2b385e0d536d9fe17bb38da7e69541ecca 100644
 --- a/net/minecraft/world/level/chunk/ChunkAccess.java
