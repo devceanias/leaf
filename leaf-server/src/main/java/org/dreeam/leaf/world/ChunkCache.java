@@ -1,7 +1,7 @@
 package org.dreeam.leaf.world;
 
 import it.unimi.dsi.fastutil.HashCommon;
-import org.dreeam.leaf.config.modules.opt.DisableChunkCacheThreadChecks;
+import org.dreeam.leaf.config.modules.opt.AllowAsyncWorldChunkCreation;
 import org.jspecify.annotations.Nullable;
 import org.spigotmc.WatchdogThread;
 
@@ -197,7 +197,7 @@ public final class ChunkCache<V> {
     /// @see #isSameThread()
     /// @see #setThread()
     public void ensureSameThread() {
-        if (DisableChunkCacheThreadChecks.enabled) {
+        if (AllowAsyncWorldChunkCreation.enabled) {
             return;
         }
 
