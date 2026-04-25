@@ -1,0 +1,99 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Sat, 25 Apr 2026 20:30:32 +1000
+Subject: [PATCH] remove lagging threshold path
+
+
+diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/MinecraftServer.java
+index 912ef41ae1e97ff856386394d8816710d31d2e13..651ce7ae0b78c83d5dfab9adfac80d66a62741d4 100644
+--- a/net/minecraft/server/MinecraftServer.java
++++ b/net/minecraft/server/MinecraftServer.java
+@@ -308,7 +308,6 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+     public boolean isIteratingOverLevels = false; // Paper - Throw exception on world create while being ticked
+     private final Set<String> pluginsBlockingSleep = new java.util.HashSet<>(); // Paper - API to allow/disallow tick sleeping
+     public static final long SERVER_INIT = System.nanoTime(); // Paper - Lag compensation
+-    public boolean lagging = false; // Purpur - Lagging threshold
+     protected boolean upnp = false; // Purpur - UPnP Port Forwarding
+     public gg.pufferfish.pufferfish.util.AsyncExecutor mobSpawnExecutor = new gg.pufferfish.pufferfish.util.AsyncExecutor("Leaf Async Mob Spawn Thread"); // Pufferfish - optimize mob spawning // Leaf - Fix Pufferfish and Purpur patches - Unify thread name
+     public java.util.concurrent.Semaphore serverLevelTickingSemaphore = null; // Leaf - SparklyPaper - parallel world ticking
+@@ -1402,8 +1401,6 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+                         org.purpurmc.purpur.PurpurConfig.tpsCatchup ? 5 : 1 //ConfigHolder.getConfig().tickLoop.catchupTicks.getOrDefault(MoonriseConfig.TickLoop.DEFAULT_CATCHUP_TICKS).intValue() // Purpur - Configurable TPS Catchup
+                     );
+ 
+-                    lagging = getTPSIncluding5SecondsReadOnly()[0] < org.purpurmc.purpur.PurpurConfig.laggingThreshold; // Purpur - Lagging threshold // Gale - Purpur - 5 second TPS average
+-
+                     // adjust ticksBehind so that it is not greater-than catchup
+                     if (ticksBehind > catchup) {
+                         final long difference = ticksBehind - catchup;
+diff --git a/net/minecraft/world/entity/monster/zombie/Drowned.java b/net/minecraft/world/entity/monster/zombie/Drowned.java
+index c65831fc755423cdec2aa981d96641f3636f7376..bd8107a802d2a9a34389c3f8d27590c3fff8d841 100644
+--- a/net/minecraft/world/entity/monster/zombie/Drowned.java
++++ b/net/minecraft/world/entity/monster/zombie/Drowned.java
+@@ -163,12 +163,12 @@ public class Drowned extends Zombie implements RangedAttackMob {
+         if (this.level().spigotConfig.zombieAggressiveTowardsVillager) this.targetSelector.addGoal(3, new NearestAttackableTargetGoal<>(this, AbstractVillager.class, false) { // Paper - Check drowned for villager aggression config
+             @Override
+             public boolean canUse() {
+-                return (level().purpurConfig.zombieAggressiveTowardsVillagerWhenLagging || !level().getServer().server.isLagging()) && super.canUse();
++                return super.canUse();
+             }
+ 
+             @Override
+             public boolean canContinueToUse() {
+-                return (level().purpurConfig.zombieAggressiveTowardsVillagerWhenLagging || !level().getServer().server.isLagging()) && super.canContinueToUse();
++                return super.canContinueToUse();
+             }
+         });
+         // Purpur end - Add option to disable zombie aggressiveness towards villagers
+diff --git a/net/minecraft/world/entity/monster/zombie/Zombie.java b/net/minecraft/world/entity/monster/zombie/Zombie.java
+index b840ab9e91f7b859aa9cffdf6607eb4a20b81f61..829b6c69b11c651a8eee573a86cb67df0a454452 100644
+--- a/net/minecraft/world/entity/monster/zombie/Zombie.java
++++ b/net/minecraft/world/entity/monster/zombie/Zombie.java
+@@ -186,12 +186,12 @@ public class Zombie extends Monster {
+         if (this.level().spigotConfig.zombieAggressiveTowardsVillager) this.targetSelector.addGoal(3, new NearestAttackableTargetGoal<>(this, AbstractVillager.class, false) { // Spigot
+             @Override
+             public boolean canUse() {
+-                return (level().purpurConfig.zombieAggressiveTowardsVillagerWhenLagging || !level().getServer().server.isLagging()) && super.canUse();
++                return super.canUse();
+             }
+ 
+             @Override
+             public boolean canContinueToUse() {
+-                return (level().purpurConfig.zombieAggressiveTowardsVillagerWhenLagging || !level().getServer().server.isLagging()) && super.canContinueToUse();
++                return super.canContinueToUse();
+             }
+         });
+         // Purpur end - Add option to disable zombie aggressiveness towards villagers
+diff --git a/org/purpurmc/purpur/PurpurConfig.java b/org/purpurmc/purpur/PurpurConfig.java
+index 8c8d56067a7b7d95f5ff816ccb64210e81969d80..2d4779faace91608e109fedeffae804ae03de72e 100644
+--- a/org/purpurmc/purpur/PurpurConfig.java
++++ b/org/purpurmc/purpur/PurpurConfig.java
+@@ -244,9 +244,7 @@ public class PurpurConfig {
+         deathMessageOnlyBroadcastToAffectedPlayer = getBoolean("settings.broadcasts.death.only-broadcast-to-affected-player", deathMessageOnlyBroadcastToAffectedPlayer);
+     }
+ 
+-    public static double laggingThreshold = 19.0D;
+     private static void tickLoopSettings() {
+-        laggingThreshold = getDouble("settings.lagging-threshold", laggingThreshold);
+     }
+ 
+     public static boolean disableGiveCommandDrops = false;
+diff --git a/org/purpurmc/purpur/PurpurWorldConfig.java b/org/purpurmc/purpur/PurpurWorldConfig.java
+index 35749c9a231f0265542dfbbd0e903c61c7804eac..f70fdb81f6f9db79445ffb4c4c8f36d62e885051 100644
+--- a/org/purpurmc/purpur/PurpurWorldConfig.java
++++ b/org/purpurmc/purpur/PurpurWorldConfig.java
+@@ -3707,7 +3707,6 @@ public class PurpurWorldConfig {
+     public boolean zombieJockeyOnlyBaby = true;
+     public double zombieJockeyChance = 0.05D;
+     public boolean zombieJockeyTryExistingChickens = true;
+-    public boolean zombieAggressiveTowardsVillagerWhenLagging = true;
+     public Boolean zombieMobGriefingOverride = null;
+     public boolean zombieTakeDamageFromWater = false;
+     public boolean zombieAlwaysDropExp = false;
+@@ -3729,7 +3728,6 @@ public class PurpurWorldConfig {
+         zombieJockeyOnlyBaby = getBoolean("mobs.zombie.jockey.only-babies", zombieJockeyOnlyBaby);
+         zombieJockeyChance = getDouble("mobs.zombie.jockey.chance", zombieJockeyChance);
+         zombieJockeyTryExistingChickens = getBoolean("mobs.zombie.jockey.try-existing-chickens", zombieJockeyTryExistingChickens);
+-        zombieAggressiveTowardsVillagerWhenLagging = getBoolean("mobs.zombie.aggressive-towards-villager-when-lagging", zombieAggressiveTowardsVillagerWhenLagging);
+         if (PurpurConfig.version < 43) {
+             boolean oldVal = getBoolean("mobs.zombie.bypass-mob-griefing", false);
+             set("mobs.zombie.bypass-mob-griefing", null);
