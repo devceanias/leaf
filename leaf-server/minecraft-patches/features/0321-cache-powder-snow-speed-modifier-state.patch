@@ -1,0 +1,70 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Sat, 25 Apr 2026 21:26:45 +1000
+Subject: [PATCH] cache powder snow speed modifier state
+
+
+diff --git a/net/minecraft/world/entity/LivingEntity.java b/net/minecraft/world/entity/LivingEntity.java
+index ea8d350c94d36e213d91af75d4d3567172162e1a..2d50cabf2ae898cbfb0396b46175e4b64ba4e206 100644
+--- a/net/minecraft/world/entity/LivingEntity.java
++++ b/net/minecraft/world/entity/LivingEntity.java
+@@ -283,6 +283,9 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+     );
+     protected final EntityEquipment equipment;
+     private Waypoint.Icon locatorBarIcon = new Waypoint.Icon();
++
++    private boolean hasPowderSnowSpeedModifier;
++
+     // CraftBukkit start
+     public int expToDrop;
+     public List<DefaultDrop> drops = new java.util.ArrayList<>(); // Paper - Restore vanilla drops behavior
+@@ -566,25 +569,37 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+     }
+ 
+     protected void removeFrost() {
++        if (!hasPowderSnowSpeedModifier) {
++            return;
++        }
++
+         AttributeInstance attribute = this.getAttribute(Attributes.MOVEMENT_SPEED);
+         if (attribute != null) {
+-            if (attribute.getModifier(SPEED_MODIFIER_POWDER_SNOW_ID) != null) {
+-                attribute.removeModifier(SPEED_MODIFIER_POWDER_SNOW_ID);
+-            }
++            attribute.removeModifier(SPEED_MODIFIER_POWDER_SNOW_ID);
+         }
++
++        hasPowderSnowSpeedModifier = false;
+     }
+ 
+     protected void tryAddFrost() {
+-            int ticksFrozen = this.getTicksFrozen();
+-            if (ticksFrozen > 0) {
+-                AttributeInstance attribute = this.getBlockStateOnLegacy().isAir() ? null : this.getAttribute(Attributes.MOVEMENT_SPEED); // Gale - Lithium - check frozen ticks before landing block
+-                if (attribute == null) {
+-                    return;
+-                }
++        int ticksFrozen = this.getTicksFrozen();
+ 
+-                float f = -0.05F * this.getPercentFrozen();
+-                attribute.addTransientModifier(new AttributeModifier(SPEED_MODIFIER_POWDER_SNOW_ID, f, AttributeModifier.Operation.ADD_VALUE));
+-            }
++        if (ticksFrozen <= 0) {
++            return;
++        }
++
++        AttributeInstance attribute = this.getBlockStateOnLegacy().isAir() ? null : this.getAttribute(Attributes.MOVEMENT_SPEED); // Gale - Lithium - check frozen ticks before landing block
++
++        if (attribute == null) {
++            removeFrost();
++
++            return;
++        }
++
++        float f = -0.05F * this.getPercentFrozen();
++        attribute.addOrUpdateTransientModifier(new AttributeModifier(SPEED_MODIFIER_POWDER_SNOW_ID, f, AttributeModifier.Operation.ADD_VALUE));
++
++        hasPowderSnowSpeedModifier = true;
+     }
+ 
+     protected void onChangedBlock(ServerLevel level, BlockPos pos) {
