@@ -1,0 +1,521 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Sun, 26 Apr 2026 03:16:40 +1000
+Subject: [PATCH] add fakebright lighting
+
+
+diff --git a/ca/spottedleaf/moonrise/patches/starlight/light/StarLightEngine.java b/ca/spottedleaf/moonrise/patches/starlight/light/StarLightEngine.java
+index c6222bfb75706052df41d821f2fcfc4620ce3672..a364950c551ec8742f9ddfb6c9e2c9805ffe00fc 100644
+--- a/ca/spottedleaf/moonrise/patches/starlight/light/StarLightEngine.java
++++ b/ca/spottedleaf/moonrise/patches/starlight/light/StarLightEngine.java
+@@ -27,6 +27,7 @@ import java.util.ArrayList;
+ import java.util.Arrays;
+ import java.util.List;
+ import java.util.Set;
++import java.util.concurrent.ConcurrentHashMap;
+ import java.util.function.Consumer;
+ import java.util.function.IntConsumer;
+ 
+@@ -34,6 +35,17 @@ public abstract class StarLightEngine {
+ 
+     protected static final BlockState AIR_BLOCK_STATE = Blocks.AIR.defaultBlockState();
+ 
++    public static final byte[] FULL_LIGHT_DATA = new byte[SWMRNibbleArray.ARRAY_SIZE];
++
++    private static final SWMRNibbleArray FULL_LIGHT_NIBBLE;
++    private static final ConcurrentHashMap<Integer, SWMRNibbleArray[]> FULL_LIGHT_CACHE = new ConcurrentHashMap<>();
++    private static final ConcurrentHashMap<Integer, boolean[]> NON_EMPTY_SECTIONS = new ConcurrentHashMap<>();
++
++    static {
++        Arrays.fill(FULL_LIGHT_DATA, (byte)-1);
++        FULL_LIGHT_NIBBLE = new SWMRNibbleArray(FULL_LIGHT_DATA, true);
++    }
++
+     protected static final AxisDirection[] DIRECTIONS = AxisDirection.values();
+     protected static final AxisDirection[] AXIS_DIRECTIONS = DIRECTIONS;
+     protected static final AxisDirection[] ONLY_HORIZONTAL_DIRECTIONS = new AxisDirection[] {
+@@ -159,6 +171,39 @@ public abstract class StarLightEngine {
+         }
+     }
+ 
++    public static boolean isFakebright(final LevelHeightAccessor world) {
++        return world instanceof final Level level && level.galeConfig().smallOptimizations.applyFakebright;
++    }
++
++    public static SWMRNibbleArray[] getFilledFullLight(final LevelHeightAccessor world) {
++        return getFilledFullLight(WorldUtil.getTotalLightSections(world));
++    }
++
++    private static SWMRNibbleArray[] getFilledFullLight(final int totalLightSections) {
++        return FULL_LIGHT_CACHE.computeIfAbsent(totalLightSections, key -> {
++            final SWMRNibbleArray[] ret = new SWMRNibbleArray[key];
++
++            Arrays.fill(ret, FULL_LIGHT_NIBBLE);
++
++            return ret;
++        });
++    }
++
++    public static boolean[] getNonEmptySections(final LevelHeightAccessor world) {
++        return getNonEmptySections(WorldUtil.getTotalSections(world));
++    }
++
++    private static boolean[] getNonEmptySections(final int totalSections) {
++        return NON_EMPTY_SECTIONS.computeIfAbsent(totalSections, boolean[]::new);
++    }
++
++    public static void applyFakebright(final ChunkAccess chunk, final LevelHeightAccessor world) {
++        chunk.starlight$setBlockNibbles(getFilledFullLight(world));
++        chunk.starlight$setSkyNibbles(getFilledFullLight(world));
++        chunk.starlight$setBlockEmptinessMap(getNonEmptySections(world));
++        chunk.starlight$setSkyEmptinessMap(getNonEmptySections(world));
++    }
++
+     protected final void setupEncodeOffset(final int centerX, final int centerY, final int centerZ) {
+         // 31 = center + encodeOffset
+         this.encodeOffsetX = 31 - centerX;
+diff --git a/ca/spottedleaf/moonrise/patches/starlight/light/StarLightInterface.java b/ca/spottedleaf/moonrise/patches/starlight/light/StarLightInterface.java
+index a2fb9f49584467913a064ca0104101f45ff589e2..cfb8c2d71dc2ebe915ed03ec287ea2181f35ee17 100644
+--- a/ca/spottedleaf/moonrise/patches/starlight/light/StarLightInterface.java
++++ b/ca/spottedleaf/moonrise/patches/starlight/light/StarLightInterface.java
+@@ -66,6 +66,8 @@ public final class StarLightInterface {
+     private final boolean hasBlockLight;
+     private final boolean hasSkyLight;
+ 
++    private final boolean isFakebright;
++
+     public StarLightInterface(final LightChunkGetter lightAccess, final boolean hasSkyLight, final boolean hasBlockLight, final LevelLightEngine lightEngine) {
+         this.lightAccess = lightAccess;
+         this.world = lightAccess == null ? null : (Level)lightAccess.getLevel();
+@@ -91,6 +93,7 @@ public final class StarLightInterface {
+         this.lightEngine = lightEngine;
+         this.hasBlockLight = hasBlockLight;
+         this.hasSkyLight = hasSkyLight;
++        this.isFakebright = this.world != null && this.world.galeConfig().smallOptimizations.applyFakebright;
+         this.skyReader = !hasSkyLight ? LayerLightEventListener.DummyLightLayerEventListener.INSTANCE : new LayerLightEventListener() {
+             @Override
+             public void checkBlock(final BlockPos blockPos) {
+@@ -120,7 +123,16 @@ public final class StarLightInterface {
+ 
+             @Override
+             public DataLayer getDataLayerData(final SectionPos pos) {
++                if (StarLightInterface.this.isFakebright) {
++                    if (StarLightInterface.this.getAnyChunkNow(pos.getX(), pos.getZ()) == null) {
++                        return null;
++                    }
++
++                    return new DataLayer(15);
++                }
++
+                 final ChunkAccess chunk = StarLightInterface.this.getAnyChunkNow(pos.getX(), pos.getZ());
++
+                 if (chunk == null || (!StarLightInterface.this.isClientSide && !chunk.isLightCorrect()) || !chunk.getPersistedStatus().isOrAfter(ChunkStatus.LIGHT)) {
+                     return null;
+                 }
+@@ -177,6 +189,14 @@ public final class StarLightInterface {
+ 
+             @Override
+             public DataLayer getDataLayerData(final SectionPos pos) {
++                if (StarLightInterface.this.isFakebright) {
++                    if (StarLightInterface.this.getAnyChunkNow(pos.getX(), pos.getZ()) == null) {
++                        return null;
++                    }
++
++                    return new DataLayer(15);
++                }
++
+                 final ChunkAccess chunk = StarLightInterface.this.getAnyChunkNow(pos.getX(), pos.getZ());
+ 
+                 if (chunk == null || pos.getY() < StarLightInterface.this.minLightSection || pos.getY() > StarLightInterface.this.maxLightSection) {
+@@ -221,6 +241,10 @@ public final class StarLightInterface {
+     }
+ 
+     public int getSkyLightValue(final BlockPos blockPos, final ChunkAccess chunk) {
++        if (isFakebright) {
++            return 15;
++        }
++
+         if (!this.hasSkyLight) {
+             return 0;
+         }
+@@ -291,6 +315,10 @@ public final class StarLightInterface {
+     }
+ 
+     public int getBlockLightValue(final BlockPos blockPos, final ChunkAccess chunk) {
++        if (isFakebright) {
++            return 15;
++        }
++
+         if (!this.hasBlockLight) {
+             return 0;
+         }
+@@ -313,6 +341,10 @@ public final class StarLightInterface {
+     }
+ 
+     public int getRawBrightness(final BlockPos pos, final int ambientDarkness) {
++        if (isFakebright) {
++            return 15;
++        }
++
+         final ChunkAccess chunk = this.getAnyChunkNow(pos.getX() >> 4, pos.getZ() >> 4);
+ 
+         final int sky = this.getSkyLightValue(pos, chunk) - ambientDarkness;
+@@ -419,6 +451,10 @@ public final class StarLightInterface {
+             return null;
+         }
+ 
++        if (isFakebright) {
++            return null;
++        }
++
+         return this.lightQueue.queueBlockChange(pos);
+     }
+ 
+@@ -427,10 +463,20 @@ public final class StarLightInterface {
+             return null;
+         }
+ 
++        if (isFakebright) {
++            return null;
++        }
++
+         return this.lightQueue.queueSectionChange(pos, newEmptyValue);
+     }
+ 
+     public void forceLoadInChunk(final ChunkAccess chunk, final Boolean[] emptySections) {
++        if (isFakebright) {
++            StarLightEngine.applyFakebright(chunk, this.world);
++
++            return;
++        }
++
+         final SkyStarLightEngine skyEngine = this.getSkyLightEngine();
+         final BlockStarLightEngine blockEngine = this.getBlockLightEngine();
+ 
+@@ -448,6 +494,10 @@ public final class StarLightInterface {
+     }
+ 
+     public void loadInChunk(final int chunkX, final int chunkZ, final Boolean[] emptySections) {
++        if (this.isFakebright) {
++            return;
++        }
++
+         final SkyStarLightEngine skyEngine = this.getSkyLightEngine();
+         final BlockStarLightEngine blockEngine = this.getBlockLightEngine();
+ 
+@@ -465,6 +515,12 @@ public final class StarLightInterface {
+     }
+ 
+     public void lightChunk(final ChunkAccess chunk, final Boolean[] emptySections) {
++        if (isFakebright) {
++            StarLightEngine.applyFakebright(chunk, this.world);
++
++            return;
++        }
++
+         final SkyStarLightEngine skyEngine = this.getSkyLightEngine();
+         final BlockStarLightEngine blockEngine = this.getBlockLightEngine();
+ 
+@@ -483,6 +539,20 @@ public final class StarLightInterface {
+ 
+     public void relightChunks(final Set<ChunkPos> chunks, final Consumer<ChunkPos> chunkLightCallback,
+                               final IntConsumer onComplete) {
++        if (isFakebright) {
++            if (chunkLightCallback != null) {
++                for (final ChunkPos chunk : chunks) {
++                    chunkLightCallback.accept(chunk);
++                }
++            }
++
++            if (onComplete != null) {
++                onComplete.accept(chunks.size());
++            }
++
++            return;
++        }
++
+         final SkyStarLightEngine skyEngine = this.getSkyLightEngine();
+         final BlockStarLightEngine blockEngine = this.getBlockLightEngine();
+ 
+@@ -501,11 +571,19 @@ public final class StarLightInterface {
+     }
+ 
+     public void checkChunkEdges(final int chunkX, final int chunkZ) {
++        if (isFakebright) {
++            return;
++        }
++
+         this.checkSkyEdges(chunkX, chunkZ);
+         this.checkBlockEdges(chunkX, chunkZ);
+     }
+ 
+     public void checkSkyEdges(final int chunkX, final int chunkZ) {
++        if (isFakebright) {
++            return;
++        }
++
+         final SkyStarLightEngine skyEngine = this.getSkyLightEngine();
+ 
+         try {
+@@ -518,6 +596,10 @@ public final class StarLightInterface {
+     }
+ 
+     public void checkBlockEdges(final int chunkX, final int chunkZ) {
++        if (isFakebright) {
++            return;
++        }
++
+         final BlockStarLightEngine blockEngine = this.getBlockLightEngine();
+         try {
+             if (blockEngine != null) {
+@@ -529,6 +611,10 @@ public final class StarLightInterface {
+     }
+ 
+     public void propagateChanges() {
++        if (isFakebright) {
++            return;
++        }
++
+         final LightQueue lightQueue = this.lightQueue;
+         if (lightQueue instanceof ClientLightQueue clientLightQueue) {
+             clientLightQueue.drainTasks();
+diff --git a/ca/spottedleaf/moonrise/patches/starlight/util/SaveUtil.java b/ca/spottedleaf/moonrise/patches/starlight/util/SaveUtil.java
+index 95154636727366adfb4fb67e7db8b09f3684f853..43e625abcb315faa4f522d542d8317fe887c98d3 100644
+--- a/ca/spottedleaf/moonrise/patches/starlight/util/SaveUtil.java
++++ b/ca/spottedleaf/moonrise/patches/starlight/util/SaveUtil.java
+@@ -44,6 +44,28 @@ public final class SaveUtil {
+             return;
+         }
+ 
++        if (StarLightEngine.isFakebright(world)) {
++            final ListTag sections = tag.getListOrEmpty("sections");
++
++            for (int i = 0; i < sections.size(); ++i) {
++                final CompoundTag stored = sections.getCompound(i).orElse(null);
++
++                if (stored == null) {
++                    continue;
++                }
++
++                stored.remove("BlockLight");
++                stored.remove("SkyLight");
++                stored.remove(BLOCKLIGHT_STATE_TAG);
++                stored.remove(SKYLIGHT_STATE_TAG);
++            }
++
++            tag.putBoolean("isLightOn", false);
++            tag.putInt(STARLIGHT_VERSION_TAG, STARLIGHT_LIGHT_VERSION);
++
++            return;
++        }
++
+         final int minSection = WorldUtil.getMinLightSection(world);
+         final int maxSection = WorldUtil.getMaxLightSection(world);
+ 
+@@ -140,6 +162,13 @@ public final class SaveUtil {
+         if (into == null) {
+             return;
+         }
++
++        if (StarLightEngine.isFakebright(world)) {
++            StarLightEngine.applyFakebright(into, world);
++
++            return;
++        }
++
+         final int minSection = WorldUtil.getMinLightSection(world);
+         final int maxSection = WorldUtil.getMaxLightSection(world);
+ 
+diff --git a/net/minecraft/network/protocol/game/ClientboundLightUpdatePacketData.java b/net/minecraft/network/protocol/game/ClientboundLightUpdatePacketData.java
+index cc5b6e5392cdd181b460dbc2200fcb2440310562..870e2b7dca867adf70c72e2903c06cae33e381a6 100644
+--- a/net/minecraft/network/protocol/game/ClientboundLightUpdatePacketData.java
++++ b/net/minecraft/network/protocol/game/ClientboundLightUpdatePacketData.java
+@@ -1,6 +1,6 @@
+ package net.minecraft.network.protocol.game;
+ 
+-import com.google.common.collect.Lists;
++import ca.spottedleaf.moonrise.patches.starlight.light.StarLightEngine;
+ import io.netty.buffer.ByteBuf;
+ import java.util.BitSet;
+ import java.util.List;
+@@ -9,6 +9,7 @@ import net.minecraft.network.FriendlyByteBuf;
+ import net.minecraft.network.codec.ByteBufCodecs;
+ import net.minecraft.network.codec.StreamCodec;
+ import net.minecraft.world.level.ChunkPos;
++import net.minecraft.world.level.Level;
+ import net.minecraft.world.level.LightLayer;
+ import net.minecraft.world.level.chunk.DataLayer;
+ import net.minecraft.world.level.lighting.LevelLightEngine;
+@@ -65,10 +66,29 @@ public class ClientboundLightUpdatePacketData {
+         var skyLayerListener = lightEngine.getLayerListener(LightLayer.SKY);
+         var blockLayerListener = lightEngine.getLayerListener(LightLayer.BLOCK);
+ 
++        final Level world = lightEngine.starlight$getLightEngine().getWorld();
++        final boolean fakebright = world != null && world.galeConfig().smallOptimizations.applyFakebright;
++
+         // Single pass through all sections
+         for (int i = 0; i < sectionCount; i++) {
+-            int sectionY = minLightSection + i;
+-            SectionPos sectionPos = SectionPos.of(chunkPos.x, sectionY, chunkPos.z);
++            if (fakebright) {
++                if ((skyLight == null || skyLight.get(i)) && lightEngine.starlight$getLightEngine().hasSkyLight()) {
++                    skyYMask.set(i);
++
++                    skyBuffer[skyCount++] = StarLightEngine.FULL_LIGHT_DATA;
++                }
++
++                if (blockLight == null || blockLight.get(i)) {
++                    blockYMask.set(i);
++
++                    blockBuffer[blockCount++] = StarLightEngine.FULL_LIGHT_DATA;
++                }
++
++                continue;
++            }
++
++            final int sectionY = minLightSection + i;
++            final SectionPos sectionPos = SectionPos.of(chunkPos.x, sectionY, chunkPos.z);
+ 
+             // Process sky light
+             if (skyLight == null || skyLight.get(i)) {
+@@ -102,9 +122,8 @@ public class ClientboundLightUpdatePacketData {
+         // Create final arrays with exact sizes
+         if (skyCount > 0) {
+             this.skyUpdates = new byte[skyCount][];
+-            // Clone only at the end to minimize work
+             for (int i = 0; i < skyCount; i++) {
+-                this.skyUpdates[i] = skyBuffer[i].clone();
++                this.skyUpdates[i] = fakebright ? skyBuffer[i] : skyBuffer[i].clone();
+             }
+         } else {
+             this.skyUpdates = EMPTY_ARRAY;
+@@ -112,9 +131,8 @@ public class ClientboundLightUpdatePacketData {
+ 
+         if (blockCount > 0) {
+             this.blockUpdates = new byte[blockCount][];
+-            // Clone only at the end to minimize work
+             for (int i = 0; i < blockCount; i++) {
+-                this.blockUpdates[i] = blockBuffer[i].clone();
++                this.blockUpdates[i] = fakebright ? blockBuffer[i] : blockBuffer[i].clone();
+             }
+         } else {
+             this.blockUpdates = EMPTY_ARRAY;
+diff --git a/net/minecraft/world/level/chunk/ChunkAccess.java b/net/minecraft/world/level/chunk/ChunkAccess.java
+index 6f55d5bb180531028cf9c9a2ad67da4585a13ef1..8b5dec2b385e0d536d9fe17bb38da7e69541ecca 100644
+--- a/net/minecraft/world/level/chunk/ChunkAccess.java
++++ b/net/minecraft/world/level/chunk/ChunkAccess.java
+@@ -1,5 +1,6 @@
+ package net.minecraft.world.level.chunk;
+ 
++import ca.spottedleaf.moonrise.patches.starlight.light.StarLightEngine;
+ import com.google.common.collect.Maps;
+ import com.google.common.collect.Sets;
+ import com.mojang.logging.LogUtils;
+@@ -168,9 +169,13 @@ public abstract class ChunkAccess implements BiomeManager.NoiseBiomeSource, Ligh
+ 
+         this.replaceMissingSections(containerFactory, this.sections); // Paper - Anti-Xray - make it a non-static method
+         // Paper start - rewrite chunk system
+-        if (!((Object)this instanceof ImposterProtoChunk)) {
+-            this.starlight$setBlockNibbles(ca.spottedleaf.moonrise.patches.starlight.light.StarLightEngine.getFilledEmptyLight(levelHeightAccessor));
+-            this.starlight$setSkyNibbles(ca.spottedleaf.moonrise.patches.starlight.light.StarLightEngine.getFilledEmptyLight(levelHeightAccessor));
++        if (!(this instanceof ImposterProtoChunk)) {
++            if (StarLightEngine.isFakebright(levelHeightAccessor)) {
++                StarLightEngine.applyFakebright(this, levelHeightAccessor);
++            } else {
++                starlight$setBlockNibbles(StarLightEngine.getFilledEmptyLight(levelHeightAccessor));
++                starlight$setSkyNibbles(StarLightEngine.getFilledEmptyLight(levelHeightAccessor));
++            }
+         }
+         // Paper end - rewrite chunk system
+         // Paper start - get block chunk optimisation
+diff --git a/net/minecraft/world/level/chunk/storage/SerializableChunkData.java b/net/minecraft/world/level/chunk/storage/SerializableChunkData.java
+index e27b54f9dd30b08342d7ae2779d10cfdc643ed16..595de27cd5026a066f53231332395cc522841fb6 100644
+--- a/net/minecraft/world/level/chunk/storage/SerializableChunkData.java
++++ b/net/minecraft/world/level/chunk/storage/SerializableChunkData.java
+@@ -1,5 +1,6 @@
+ package net.minecraft.world.level.chunk.storage;
+ 
++import ca.spottedleaf.moonrise.patches.starlight.light.StarLightEngine;
+ import com.google.common.collect.Maps;
+ import com.mojang.logging.LogUtils;
+ import com.mojang.serialization.Codec;
+@@ -87,6 +88,7 @@ public record SerializableChunkData(
+     Map<Heightmap.Types, long[]> heightmaps,
+     ChunkAccess.PackedTicks packedTicks,
+     @Nullable ShortList[] postProcessingSections,
++    boolean fakebright,
+     boolean lightCorrect,
+     List<SerializableChunkData.SectionData> sectionData,
+     List<CompoundTag> entities,
+@@ -158,6 +160,7 @@ public record SerializableChunkData(
+             ChunkStatus chunkStatus = tag.read("Status", ChunkStatus.CODEC).orElse(ChunkStatus.EMPTY);
+             UpgradeData upgradeData = tag.getCompound("UpgradeData").map(compoundTag1 -> new UpgradeData(compoundTag1, level)).orElse(UpgradeData.EMPTY);
+             boolean booleanOr = chunkStatus.isOrAfter(ChunkStatus.LIGHT) && (tag.get("isLightOn") != null && tag.getIntOr(ca.spottedleaf.moonrise.patches.starlight.util.SaveUtil.STARLIGHT_VERSION_TAG, -1) == ca.spottedleaf.moonrise.patches.starlight.util.SaveUtil.STARLIGHT_LIGHT_VERSION); // Paper - starlight
++            boolean fakeBright = serverLevel.galeConfig().smallOptimizations.applyFakebright;
+             BlendingData.Packed packed = tag.read("blending_data", BlendingData.Packed.CODEC).orElse(null);
+             BelowZeroRetrogen belowZeroRetrogen = tag.read("below_zero_retrogen", BelowZeroRetrogen.CODEC).orElse(null);
+             long[] longs = tag.getLongArray("carving_mask").orElse(null);
+@@ -265,6 +268,7 @@ public record SerializableChunkData(
+                 map,
+                 packedTicks,
+                 lists,
++                fakeBright,
+                 booleanOr,
+                 list5,
+                 list3,
+@@ -278,6 +282,11 @@ public record SerializableChunkData(
+ 
+     // Paper start - starlight
+     private ProtoChunk loadStarlightLightData(final ServerLevel world, final ProtoChunk ret) {
++        if (fakebright) {
++            StarLightEngine.applyFakebright(ret, world);
++
++            return ret;
++        }
+ 
+         final boolean hasSkyLight = world.dimensionType().hasSkyLight();
+         final int minSection = ca.spottedleaf.moonrise.common.util.WorldUtil.getMinLightSection(world);
+@@ -610,6 +619,7 @@ public record SerializableChunkData(
+                 map,
+                 ticksForSerialization,
+                 lists,
++                level.galeConfig().smallOptimizations.applyFakebright,
+                 chunk.isLightCorrect(),
+                 list,
+                 list2,
+@@ -647,11 +657,11 @@ public record SerializableChunkData(
+                 compoundTag1.store("biomes", codec1, levelChunkSection.getBiomes());
+             }
+ 
+-            if (sectionData.blockLight != null) {
++            if (!fakebright && sectionData.blockLight != null) {
+                 compoundTag1.putByteArray("BlockLight", sectionData.blockLight.getData());
+             }
+ 
+-            if (sectionData.skyLight != null) {
++            if (!fakebright && sectionData.skyLight != null) {
+                 compoundTag1.putByteArray("SkyLight", sectionData.skyLight.getData());
+             }
+ 
+@@ -659,11 +669,11 @@ public record SerializableChunkData(
+             final int blockState = ((ca.spottedleaf.moonrise.patches.starlight.storage.StarlightSectionData)(Object)sectionData).starlight$getBlockLightState();
+             final int skyState = ((ca.spottedleaf.moonrise.patches.starlight.storage.StarlightSectionData)(Object)sectionData).starlight$getSkyLightState();
+ 
+-            if (blockState > 0) {
++            if (!fakebright && blockState > 0) {
+                 sectionNBT.putInt(ca.spottedleaf.moonrise.patches.starlight.util.SaveUtil.BLOCKLIGHT_STATE_TAG, blockState);
+             }
+ 
+-            if (skyState > 0) {
++            if (!fakebright && skyState > 0) {
+                 sectionNBT.putInt(ca.spottedleaf.moonrise.patches.starlight.util.SaveUtil.SKYLIGHT_STATE_TAG, skyState);
+             }
+             // Paper end - starlight
+@@ -968,6 +978,7 @@ public record SerializableChunkData(
+             heightmaps,
+             packedTicks,
+             postProcessingSections,
++            false,
+             lightCorrect,
+             sectionData,
+             entities,
