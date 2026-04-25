@@ -1,0 +1,175 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Sun, 26 Apr 2026 05:49:12 +1000
+Subject: [PATCH] allow async world chunk creation
+
+
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/server/ServerEntityLookup.java b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/server/ServerEntityLookup.java
+index 9c2a151488c9b0feb815b80fb727a60053e87cf4..78a66cc2b20ebbb6d315c359d503ffd84841cfc0 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/server/ServerEntityLookup.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/server/ServerEntityLookup.java
+@@ -16,6 +16,7 @@ import net.minecraft.server.level.TicketType;
+ import net.minecraft.world.entity.Entity;
+ import net.minecraft.world.entity.projectile.throwableitemprojectile.ThrownEnderpearl;
+ import net.minecraft.world.level.entity.LevelCallback;
++import org.dreeam.leaf.config.modules.opt.AllowAsyncWorldChunkCreation;
+ 
+ public final class ServerEntityLookup extends EntityLookup {
+ 
+@@ -48,11 +49,19 @@ public final class ServerEntityLookup extends EntityLookup {
+ 
+     @Override
+     protected void checkThread(final int chunkX, final int chunkZ, final String reason) {
++        if (AllowAsyncWorldChunkCreation.enabled) {
++            return;
++        }
++
+         TickThread.ensureTickThread(this.serverWorld, chunkX, chunkZ, reason);
+     }
+ 
+     @Override
+     protected void checkThread(final Entity entity, final String reason) {
++        if (AllowAsyncWorldChunkCreation.enabled) {
++            return;
++        }
++
+         TickThread.ensureTickThread(entity, reason);
+     }
+ 
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/level/poi/PoiChunk.java b/ca/spottedleaf/moonrise/patches/chunk_system/level/poi/PoiChunk.java
+index 5adbeecd61ab80fd86546f22f0867f27af5a7662..f119dc922595c81eb3d941989fe3fa1793298fe0 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/level/poi/PoiChunk.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/level/poi/PoiChunk.java
+@@ -12,6 +12,7 @@ import net.minecraft.resources.RegistryOps;
+ import net.minecraft.server.level.ServerLevel;
+ import net.minecraft.world.entity.ai.village.poi.PoiManager;
+ import net.minecraft.world.entity.ai.village.poi.PoiSection;
++import org.dreeam.leaf.config.modules.opt.AllowAsyncWorldChunkCreation;
+ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
+ import java.util.Optional;
+@@ -48,6 +49,16 @@ public final class PoiChunk {
+     }
+ 
+     public void load() {
++        if (AllowAsyncWorldChunkCreation.enabled) {
++            if (this.loaded) {
++                return;
++            }
++
++            this.loaded = true;
++            ((ChunkSystemPoiManager)this.world.getChunkSource().getPoiManager()).moonrise$loadInPoiChunk(this);
++            return;
++        }
++
+         TickThread.ensureTickThread(this.world, this.chunkX, this.chunkZ, "Loading in poi chunk off-main");
+         if (this.loaded) {
+             return;
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java
+index d677295a053ea3cc15272f1a2669343f0c55117e..0a2470bb3e0b4fa7c92c02e05c7d9f0d5ecdd7d0 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java
+@@ -44,6 +44,7 @@ import net.minecraft.util.SortedArraySet;
+ import net.minecraft.world.level.ChunkPos;
+ import net.minecraft.world.level.chunk.LevelChunk;
+ import net.minecraft.world.level.chunk.status.ChunkStatus;
++import org.dreeam.leaf.config.modules.opt.AllowAsyncWorldChunkCreation;
+ import org.slf4j.Logger;
+ import java.io.IOException;
+ import java.text.DecimalFormat;
+@@ -1016,7 +1017,10 @@ public final class ChunkHolderManager {
+     }
+ 
+     public ChunkEntitySlices getOrCreateEntityChunk(final int chunkX, final int chunkZ, final boolean transientChunk) {
+-        TickThread.ensureTickThread(this.world, chunkX, chunkZ, "Cannot create entity chunk off-main");
++        if (!AllowAsyncWorldChunkCreation.enabled) {
++            TickThread.ensureTickThread(this.world, chunkX, chunkZ, "Cannot create entity chunk off-main");
++        }
++
+         if (!world.leaf$shouldTrackChunk(chunkX, chunkZ)) {
+             throw new IllegalStateException("Cannot create entity chunk outside the world border: (" + chunkX + "," + chunkZ + ")");
+         }
+@@ -1101,7 +1105,10 @@ public final class ChunkHolderManager {
+     }
+ 
+     public PoiChunk loadPoiChunk(final int chunkX, final int chunkZ) {
+-        TickThread.ensureTickThread(this.world, chunkX, chunkZ, "Cannot create poi chunk off-main");
++        if (!AllowAsyncWorldChunkCreation.enabled) {
++            TickThread.ensureTickThread(this.world, chunkX, chunkZ, "Cannot create poi chunk off-main");
++        }
++
+         if (!world.leaf$shouldTrackChunk(chunkX, chunkZ)) {
+             throw new IllegalStateException("Cannot create poi chunk outside the world border: (" + chunkX + "," + chunkZ + ")");
+         }
+@@ -1199,10 +1206,12 @@ public final class ChunkHolderManager {
+     // note: never call while inside the chunk system, this will absolutely break everything
+     public void processUnloads() {
+         // Leaf start - SparklyPaper - parallel world ticking
+-        if (org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled) {
+-            TickThread.ensureTickThread(world, "Cannot unload chunks off-main");
+-        } else {
+-            TickThread.ensureTickThread("Cannot unload chunks off-main");
++        if (!AllowAsyncWorldChunkCreation.enabled) {
++            if (org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled) {
++                TickThread.ensureTickThread(world, "Cannot unload chunks off-main");
++            } else {
++                TickThread.ensureTickThread("Cannot unload chunks off-main");
++            }
+         }
+         // Leaf end - SparklyPaper - parallel world ticking
+ 
+@@ -1475,7 +1484,7 @@ public final class ChunkHolderManager {
+         }
+         final boolean isTickThread = org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled ? TickThread.isTickThreadFor(world) : TickThread.isTickThread(); // Leaf - SparklyPaper - parallel world ticking
+ 
+-        if (!PlatformHooks.get().allowAsyncTicketUpdates() && isTickThread) {
++        if (!AllowAsyncWorldChunkCreation.enabled && !PlatformHooks.get().allowAsyncTicketUpdates() && isTickThread) {
+             TickThread.ensureTickThread("Cannot asynchronously process ticket updates");
+         }
+ 
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/NewChunkHolder.java b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/NewChunkHolder.java
+index 679ee3e19236bb5b131dc0e64991e85daea01b77..8d59f99d6b157c126f8d96082785f220de35bbd7 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/NewChunkHolder.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/NewChunkHolder.java
+@@ -45,6 +45,7 @@ import net.minecraft.world.level.chunk.ImposterProtoChunk;
+ import net.minecraft.world.level.chunk.LevelChunk;
+ import net.minecraft.world.level.chunk.status.ChunkStatus;
+ import net.minecraft.world.level.chunk.storage.SerializableChunkData;
++import org.dreeam.leaf.config.modules.opt.AllowAsyncWorldChunkCreation;
+ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
+ import java.lang.invoke.VarHandle;
+@@ -77,7 +78,10 @@ public final class NewChunkHolder {
+     private CompoundTag pendingEntityChunk;
+ 
+     ChunkEntitySlices loadInEntityChunk(final boolean transientChunk) {
+-        TickThread.ensureTickThread(this.world, this.chunkX, this.chunkZ, "Cannot sync load entity data off-main");
++        if (!AllowAsyncWorldChunkCreation.enabled) {
++            TickThread.ensureTickThread(this.world, this.chunkX, this.chunkZ, "Cannot sync load entity data off-main");
++        }
++
+         final CompoundTag entityChunk;
+         final ChunkEntitySlices ret;
+         final ReentrantAreaLock.Node schedulingLock = this.scheduler.schedulingLockArea.lock(this.chunkX, this.chunkZ);
+@@ -1204,7 +1208,9 @@ public final class NewChunkHolder {
+ 
+     // only to be called on the main thread, no locks need to be held
+     public boolean handleFullStatusChange(final List<NewChunkHolder> changedFullStatus) {
+-        TickThread.ensureTickThread(this.world, this.chunkX, this.chunkZ, "Cannot update full status thread off-main");
++        if (!AllowAsyncWorldChunkCreation.enabled) {
++            TickThread.ensureTickThread(this.world, this.chunkX, this.chunkZ, "Cannot update full status thread off-main");
++        }
+ 
+         boolean ret = false;
+ 
+@@ -1653,7 +1659,9 @@ public final class NewChunkHolder {
+     private static final MoonriseRegionFileIO.RegionFileType[] REGION_FILE_TYPES = MoonriseRegionFileIO.RegionFileType.values();
+ 
+     public SaveStat save(final boolean shutdown) {
+-        TickThread.ensureTickThread(this.world, this.chunkX, this.chunkZ, "Cannot save data off-main");
++        if (!AllowAsyncWorldChunkCreation.enabled) {
++            TickThread.ensureTickThread(this.world, this.chunkX, this.chunkZ, "Cannot save data off-main");
++        }
+ 
+         ChunkAccess chunk = this.getCurrentChunk();
+         PoiChunk poi = this.getPoiChunk();
