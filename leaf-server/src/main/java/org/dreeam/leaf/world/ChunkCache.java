@@ -1,6 +1,7 @@
 package org.dreeam.leaf.world;
 
 import it.unimi.dsi.fastutil.HashCommon;
+import org.dreeam.leaf.config.modules.opt.DisableChunkCacheThreadChecks;
 import org.jspecify.annotations.Nullable;
 import org.spigotmc.WatchdogThread;
 
@@ -196,6 +197,10 @@ public final class ChunkCache<V> {
     /// @see #isSameThread()
     /// @see #setThread()
     public void ensureSameThread() {
+        if (DisableChunkCacheThreadChecks.enabled) {
+            return;
+        }
+
         if (!isSameThread() && !(Thread.currentThread() instanceof WatchdogThread)) {
             throw new IllegalStateException("Thread failed main thread check: Cannot update chunk status asynchronously, context=thread=" + Thread.currentThread().getName());
         }
