@@ -327,7 +327,7 @@ index 95154636727366adfb4fb67e7db8b09f3684f853..43e625abcb315faa4f522d542d8317fe
          final int maxSection = WorldUtil.getMaxLightSection(world);
  
 diff --git a/net/minecraft/network/protocol/game/ClientboundLightUpdatePacketData.java b/net/minecraft/network/protocol/game/ClientboundLightUpdatePacketData.java
-index cc5b6e5392cdd181b460dbc2200fcb2440310562..870e2b7dca867adf70c72e2903c06cae33e381a6 100644
+index cc5b6e5392cdd181b460dbc2200fcb2440310562..a66f3d5c47fdad909c266a132a2f03ab0e447670 100644
 --- a/net/minecraft/network/protocol/game/ClientboundLightUpdatePacketData.java
 +++ b/net/minecraft/network/protocol/game/ClientboundLightUpdatePacketData.java
 @@ -1,6 +1,6 @@
@@ -346,7 +346,7 @@ index cc5b6e5392cdd181b460dbc2200fcb2440310562..870e2b7dca867adf70c72e2903c06cae
  import net.minecraft.world.level.LightLayer;
  import net.minecraft.world.level.chunk.DataLayer;
  import net.minecraft.world.level.lighting.LevelLightEngine;
-@@ -65,10 +66,29 @@ public class ClientboundLightUpdatePacketData {
+@@ -65,10 +66,27 @@ public class ClientboundLightUpdatePacketData {
          var skyLayerListener = lightEngine.getLayerListener(LightLayer.SKY);
          var blockLayerListener = lightEngine.getLayerListener(LightLayer.BLOCK);
  
@@ -358,17 +358,15 @@ index cc5b6e5392cdd181b460dbc2200fcb2440310562..870e2b7dca867adf70c72e2903c06cae
 -            int sectionY = minLightSection + i;
 -            SectionPos sectionPos = SectionPos.of(chunkPos.x, sectionY, chunkPos.z);
 +            if (fakebright) {
-+                if ((skyLight == null || skyLight.get(i)) && lightEngine.starlight$getLightEngine().hasSkyLight()) {
++                if (lightEngine.starlight$getLightEngine().hasSkyLight()) {
 +                    skyYMask.set(i);
 +
 +                    skyBuffer[skyCount++] = StarLightEngine.FULL_LIGHT_DATA;
 +                }
 +
-+                if (blockLight == null || blockLight.get(i)) {
-+                    blockYMask.set(i);
++                blockYMask.set(i);
 +
-+                    blockBuffer[blockCount++] = StarLightEngine.FULL_LIGHT_DATA;
-+                }
++                blockBuffer[blockCount++] = StarLightEngine.FULL_LIGHT_DATA;
 +
 +                continue;
 +            }
@@ -378,7 +376,7 @@ index cc5b6e5392cdd181b460dbc2200fcb2440310562..870e2b7dca867adf70c72e2903c06cae
  
              // Process sky light
              if (skyLight == null || skyLight.get(i)) {
-@@ -102,9 +122,8 @@ public class ClientboundLightUpdatePacketData {
+@@ -102,9 +120,8 @@ public class ClientboundLightUpdatePacketData {
          // Create final arrays with exact sizes
          if (skyCount > 0) {
              this.skyUpdates = new byte[skyCount][];
@@ -389,7 +387,7 @@ index cc5b6e5392cdd181b460dbc2200fcb2440310562..870e2b7dca867adf70c72e2903c06cae
              }
          } else {
              this.skyUpdates = EMPTY_ARRAY;
-@@ -112,9 +131,8 @@ public class ClientboundLightUpdatePacketData {
+@@ -112,9 +129,8 @@ public class ClientboundLightUpdatePacketData {
  
          if (blockCount > 0) {
              this.blockUpdates = new byte[blockCount][];

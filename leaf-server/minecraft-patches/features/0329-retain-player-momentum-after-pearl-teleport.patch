@@ -5,7 +5,7 @@ Subject: [PATCH] retain player momentum after pearl teleport
 
 
 diff --git a/net/minecraft/world/entity/projectile/throwableitemprojectile/ThrownEnderpearl.java b/net/minecraft/world/entity/projectile/throwableitemprojectile/ThrownEnderpearl.java
-index e3f67101b7b6702eff18c3f64cf15a045fcb8b57..3b90e1b849010fccf2b2af64e3c6a7266b9229f5 100644
+index affa8a465dd0ba5e7a2d8852b78efd02c2820a9e..5c42745c2ca315c4070796b345609aafaae6f072 100644
 --- a/net/minecraft/world/entity/projectile/throwableitemprojectile/ThrownEnderpearl.java
 +++ b/net/minecraft/world/entity/projectile/throwableitemprojectile/ThrownEnderpearl.java
 @@ -29,6 +29,7 @@ import net.minecraft.world.phys.EntityHitResult;
@@ -16,7 +16,7 @@ index e3f67101b7b6702eff18c3f64cf15a045fcb8b57..3b90e1b849010fccf2b2af64e3c6a726
  import org.jspecify.annotations.Nullable;
  
  public class ThrownEnderpearl extends ThrowableItemProjectile {
-@@ -121,7 +122,8 @@ public class ThrownEnderpearl extends ThrowableItemProjectile {
+@@ -122,7 +123,8 @@ public class ThrownEnderpearl extends ThrowableItemProjectile {
                          // Store pre teleportation position as the teleport has been moved up.
                          final double preTeleportX = serverPlayer.getX(), preTeleportY = serverPlayer.getY(), preTeleportZ = serverPlayer.getZ();
                          final float preTeleportYRot = serverPlayer.getYRot(), preTeleportXRot = serverPlayer.getXRot();
