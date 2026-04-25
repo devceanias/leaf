@@ -1,0 +1,26 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Sun, 26 Apr 2026 01:43:31 +1000
+Subject: [PATCH] allow zero damage player hurt
+
+
+diff --git a/net/minecraft/world/entity/LivingEntity.java b/net/minecraft/world/entity/LivingEntity.java
+index 2cba7a3ac14e08aeefebaa9927c36a8cb4c59638..1a038a29eef12bf9b176e8beb4a897be006df637 100644
+--- a/net/minecraft/world/entity/LivingEntity.java
++++ b/net/minecraft/world/entity/LivingEntity.java
+@@ -1597,7 +1597,6 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+                 if (!this.actuallyHurt(level, damageSource, (float) event.getFinalDamage(), event)) { // Paper - fix invulnerability reduction in EntityDamageEvent - no longer subtract lastHurt, that is part of the damage event calc now
+                     return false;
+                 }
+-                if (this instanceof ServerPlayer && event.getDamage() == 0 && originAmount == 0) return false; // Paper - revert to vanilla damage - players are not affected by damage that is 0 - skip damage if the vanilla damage is 0 and was not modified by plugins in the event.
+                 // CraftBukkit end
+                 this.lastHurt = amount;
+                 flag1 = false;
+@@ -1610,7 +1609,6 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+                 if (!this.actuallyHurt(level, damageSource, (float) event.getFinalDamage(), event)) {
+                     return false;
+                 }
+-                if (this instanceof ServerPlayer && event.getDamage() == 0 && originAmount == 0) return false; // Paper - revert to vanilla damage - players are not affected by damage that is 0 - skip damage if the vanilla damage is 0 and was not modified by plugins in the event.
+                 this.lastHurt = amount;
+                 this.invulnerableTime = this.invulnerableDuration; // CraftBukkit - restore use of maxNoDamageTicks
+                 // this.actuallyHurt(level, damageSource, amount);
