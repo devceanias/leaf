@@ -1,0 +1,221 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Sat, 25 Apr 2026 22:06:24 +1000
+Subject: [PATCH] optimise disconnect removal
+
+
+diff --git a/ca/spottedleaf/moonrise/common/misc/NearbyPlayers.java b/ca/spottedleaf/moonrise/common/misc/NearbyPlayers.java
+index 499cad369242f9ad724b3251538d62d8dc8d2ec8..661a293306133712dfb15de9a4d0da6abeec5ded 100644
+--- a/ca/spottedleaf/moonrise/common/misc/NearbyPlayers.java
++++ b/ca/spottedleaf/moonrise/common/misc/NearbyPlayers.java
+@@ -14,6 +14,7 @@ import net.minecraft.core.BlockPos;
+ import net.minecraft.server.level.ServerLevel;
+ import net.minecraft.server.level.ServerPlayer;
+ import net.minecraft.world.level.ChunkPos;
++import org.dreeam.leaf.config.modules.async.MultithreadedTracker;
+ import java.util.ArrayList;
+ 
+ public final class NearbyPlayers {
+@@ -90,16 +91,29 @@ public final class NearbyPlayers {
+     }
+ 
+     public void removePlayer(final ServerPlayer player) {
+-        final TrackedPlayer[] players = this.players.remove(player);
+-        if (players == null) {
++        final TrackedPlayer[] trackers = this.players.remove(player);
++
++        if (trackers == null) {
+             return; // May be called during teleportation before the player is actually placed
+         }
+ 
+-        for (final TrackedPlayer tracker : players) {
++        for (final TrackedPlayer tracker : trackers) {
+             tracker.remove();
+         }
+     }
+ 
++    public void removeFast(final ServerPlayer player) {
++        final TrackedPlayer[] trackers = this.players.remove(player);
++
++        if (trackers == null) {
++            return;
++        }
++
++        for (final TrackedPlayer tracker : trackers) {
++            removeFast(tracker);
++        }
++    }
++
+     public void clear() {
+         if (this.players.isEmpty()) {
+             return;
+@@ -238,6 +252,71 @@ public final class NearbyPlayers {
+                 --this.nonEmptyLists;
+             }
+         }
++
++        public boolean removeFast(final ServerPlayer player, final NearbyMapType type) {
++            ++updateCount;
++
++            final int idx = type.ordinal();
++
++            if (MultithreadedTracker.enabled && type == NearbyMapType.VIEW_DISTANCE) {
++                trackingUpdateCountAtomic.getAndIncrement();
++                playersTracking.remove(player);
++            }
++
++            final ReferenceList<ServerPlayer> list = players[idx];
++
++            if (list == null || !list.remove(player)) {
++                return false;
++            }
++
++            if (list.size() == 0) {
++                players[idx] = null;
++
++                nearbyPlayers.directByChunk[idx].remove(chunkKey);
++
++                --nonEmptyLists;
++            }
++
++            return true;
++        }
++    }
++
++    private void removeFast(final TrackedPlayer tracker) {
++        final SingleUserAreaMap.RemoveData data = tracker.removeRawData();
++
++        if (data == null) {
++            return;
++        }
++
++        final ServerPlayer player = tracker.getParameter();
++        final NearbyMapType type = tracker.type;
++
++        final int chunkX = data.chunkX();
++        final int chunkZ = data.chunkZ();
++        final int distance = data.distance();
++        final int maxX = chunkX + distance;
++        final int maxZ = chunkZ + distance;
++
++        for (int cx = chunkX - distance; cx <= maxX; ++cx) {
++            for (int cz = chunkZ - distance; cz <= maxZ; ++cz) {
++                final long chunkKey = CoordinateUtils.getChunkKey(cx, cz);
++                final TrackedChunk chunk = byChunk.get(chunkKey);
++
++                if (chunk == null || !chunk.removeFast(player, type)) {
++                    continue;
++                }
++
++                type.removeFrom(player, world, cx, cz);
++
++                if (!chunk.isEmpty()) {
++                    continue;
++                }
++
++                byChunk.remove(chunkKey);
++
++                ((ChunkSystemLevel) world).moonrise$releaseChunkData(chunkKey).nearbyPlayers = null;
++            }
++        }
+     }
+ 
+     private final class TrackedPlayer extends SingleUserAreaMap<ServerPlayer> {
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/server/ServerEntityLookup.java b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/server/ServerEntityLookup.java
+index 4fd51f647353f08315a2b62685b981fd953a68ce..9c2a151488c9b0feb815b80fb727a60053e87cf4 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/server/ServerEntityLookup.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/server/ServerEntityLookup.java
+@@ -100,7 +100,7 @@ public final class ServerEntityLookup extends EntityLookup {
+     @Override
+     protected void removeEntityCallback(final Entity entity) {
+         if (entity instanceof ServerPlayer player) {
+-            ((ChunkSystemServerLevel)this.serverWorld).moonrise$getNearbyPlayers().removePlayer(player);
++            ((ChunkSystemServerLevel)this.serverWorld).moonrise$getNearbyPlayers().removeFast(player);
+         }
+         if (entity instanceof ThrownEnderpearl enderpearl) {
+             this.removeEnderPearl(enderpearl.chunkPosition().longKey); // Leaf - Cache chunk key
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/player/RegionizedPlayerChunkLoader.java b/ca/spottedleaf/moonrise/patches/chunk_system/player/RegionizedPlayerChunkLoader.java
+index 4adb2394cf05e23f43367dc0ecf1e1623919d497..edca39ac2046e400e97da78b0ef14721b9d618f4 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/player/RegionizedPlayerChunkLoader.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/player/RegionizedPlayerChunkLoader.java
+@@ -319,6 +319,10 @@ public final class RegionizedPlayerChunkLoader {
+     }
+ 
+     public static final class PlayerChunkLoaderData {
++        @FunctionalInterface
++        private interface RemoveCallback {
++            void remove(PlayerChunkLoaderData parameter, int chunkX, int chunkZ);
++        }
+ 
+         private static final AtomicLong ID_GENERATOR = new AtomicLong();
+         private final long id = ID_GENERATOR.incrementAndGet();
+@@ -565,6 +569,25 @@ public final class RegionizedPlayerChunkLoader {
+             }
+         };
+ 
++        private void removeMapFast(final SingleUserAreaMap<PlayerChunkLoaderData> map, final RemoveCallback callback) {
++            final SingleUserAreaMap.RemoveData removeData = map.removeRawData();
++            if (removeData == null) {
++                return;
++            }
++
++            final int chunkX = removeData.chunkX();
++            final int chunkZ = removeData.chunkZ();
++            final int distance = removeData.distance();
++            final int maxX = chunkX + distance;
++            final int maxZ = chunkZ + distance;
++
++            for (int cx = chunkX - distance; cx <= maxX; ++cx) {
++                for (int cz = chunkZ - distance; cz <= maxZ; ++cz) {
++                    callback.remove(this, cx, cz);
++                }
++            }
++        }
++
+         private static boolean wantChunkLoaded(final int centerX, final int centerZ, final int chunkX, final int chunkZ,
+                                                final int sendRadius) {
+             // expect sendRadius to be = 1 + target viewable radius
+@@ -1162,11 +1185,40 @@ public final class RegionizedPlayerChunkLoader {
+             }
+             this.removed = true;
+             // sends the chunk unload packets
+-            this.broadcastMap.remove();
++            this.removeMapFast(this.broadcastMap, (final PlayerChunkLoaderData parameter, final int chunkX, final int chunkZ) -> {
++                parameter.sendUnloadChunk(chunkX, chunkZ);
++            });
+             // cleans up loading/generating tickets
+-            this.loadTicketCleanup.remove();
++            this.removeMapFast(this.loadTicketCleanup, (final PlayerChunkLoaderData parameter, final int chunkX, final int chunkZ) -> {
++                final long chunk = CoordinateUtils.getChunkKey(chunkX, chunkZ);
++                final byte ticketStage = parameter.chunkTicketStage.remove(chunk);
++                final int level = TICKET_STAGE_TO_LEVEL[ticketStage];
++                if (level > ChunkHolderManager.MAX_TICKET_LEVEL) {
++                    return;
++                }
++
++                parameter.pushDelayedTicketOp(ChunkHolderManager.TicketOperation.addAndRemove(
++                    chunk,
++                    PLAYER_TICKET_DELAYED, level, parameter.idBoxed,
++                    PLAYER_TICKET, level, parameter.idBoxed
++                ));
++            });
+             // cleans up ticking tickets
+-            this.tickMap.remove();
++            this.removeMapFast(this.tickMap, (final PlayerChunkLoaderData parameter, final int chunkX, final int chunkZ) -> {
++                final long chunk = CoordinateUtils.getChunkKey(chunkX, chunkZ);
++                if (!parameter.chunkTicketStage.replace(chunk, CHUNK_TICKET_STAGE_TICK, CHUNK_TICKET_STAGE_GENERATED)) {
++                    return;
++                }
++
++                parameter.pushDelayedTicketOp(ChunkHolderManager.TicketOperation.addAndRemove(
++                    chunk,
++                    PLAYER_TICKET_DELAYED, TICK_TICKET_LEVEL, parameter.idBoxed,
++                    PLAYER_TICKET, TICK_TICKET_LEVEL, parameter.idBoxed
++                ));
++                parameter.pushDelayedTicketOp(ChunkHolderManager.TicketOperation.addOp(
++                    chunk, PLAYER_TICKET, GENERATED_TICKET_LEVEL, parameter.idBoxed
++                ));
++            });
+ 
+             // purge queues
+             this.sendQueue.clear();

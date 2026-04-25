@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Sat, 25 Apr 2026 22:06:12 +1000
+Subject: [PATCH] optimise disconnect removal
+
+
+diff --git a/src/main/java/ca/spottedleaf/moonrise/common/misc/SingleUserAreaMap.java b/src/main/java/ca/spottedleaf/moonrise/common/misc/SingleUserAreaMap.java
+index 8e424b48c06e90893f0f2fde7c35410bd8271469..065135e72589f61c76ef9e778e6c25db3efb529a 100644
+--- a/src/main/java/ca/spottedleaf/moonrise/common/misc/SingleUserAreaMap.java
++++ b/src/main/java/ca/spottedleaf/moonrise/common/misc/SingleUserAreaMap.java
+@@ -4,6 +4,8 @@ public abstract class SingleUserAreaMap<T> {
+ 
+     public static final int NOT_SET = Integer.MIN_VALUE;
+ 
++    public record RemoveData(int chunkX, int chunkZ, int distance) {}
++
+     private final T parameter;
+     private int lastChunkX = NOT_SET;
+     private int lastChunkZ = NOT_SET;
+@@ -235,17 +237,29 @@ public abstract class SingleUserAreaMap<T> {
+     }
+ 
+     public final boolean remove() {
+-        final int chunkX = this.lastChunkX;
+-        final int chunkZ = this.lastChunkZ;
+-        final int distance = this.distance;
+-        if (chunkX == NOT_SET) {
++        final RemoveData data = removeRawData();
++
++        if (data == null) {
+             return false;
+         }
+ 
+-        this.lastChunkX = this.lastChunkZ = this.distance = NOT_SET;
+-
+-        this.removeFromOld(this.parameter, chunkX, chunkZ, distance);
++        removeFromOld(parameter, data.chunkX(), data.chunkZ(), data.distance());
+ 
+         return true;
+     }
++
++    public final RemoveData removeRawData() {
++        final int chunkX = lastChunkX;
++
++        if (chunkX == NOT_SET) {
++            return null;
++        }
++
++        final int chunkZ = lastChunkZ;
++        final int distance = this.distance;
++
++        lastChunkX = lastChunkZ = this.distance = NOT_SET;
++
++        return new RemoveData(chunkX, chunkZ, distance);
++    }
+ }
