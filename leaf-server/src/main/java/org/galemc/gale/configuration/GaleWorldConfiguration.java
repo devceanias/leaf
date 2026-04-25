@@ -109,6 +109,7 @@ public class GaleWorldConfiguration extends ConfigurationPart {
         public class LoadChunks extends ConfigurationPart {
             public boolean toSpawnPhantoms = false; // Gale - MultiPaper - don't load chunks to spawn phantoms
             public boolean toActivateClimbingEntities = false; // Gale - don't load chunks to activate climbing entities
+            public boolean preventTrackingOutsideWorldBorder = false; // Leaf - don't track outside world border
         }
 
     }

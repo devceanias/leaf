@@ -1,0 +1,221 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Sat, 25 Apr 2026 17:55:47 +1000
+Subject: [PATCH] add preventTrackingOutsideWorldBorder
+
+
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/player/RegionizedPlayerChunkLoader.java b/ca/spottedleaf/moonrise/patches/chunk_system/player/RegionizedPlayerChunkLoader.java
+index 0a6fbbe4097ea3619f5b2601d38ac13543642e31..4adb2394cf05e23f43367dc0ecf1e1623919d497 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/player/RegionizedPlayerChunkLoader.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/player/RegionizedPlayerChunkLoader.java
+@@ -677,6 +677,10 @@ public final class RegionizedPlayerChunkLoader {
+             return Math.max(Math.abs(dx), Math.abs(dz)) <= this.lastTickDistance;
+         }
+ 
++        private boolean shouldTrackChunk(final int chunkX, final int chunkZ) {
++            return world.leaf$shouldTrackChunk(chunkX, chunkZ);
++        }
++
+         private boolean areNeighboursGenerated(final int chunkX, final int chunkZ, final int radius) {
+             for (int dz = -radius; dz <= radius; ++dz) {
+                 for (int dx = -radius; dx <= radius; ++dx) {
+@@ -685,6 +689,11 @@ public final class RegionizedPlayerChunkLoader {
+                     }
+ 
+                     final long neighbour = CoordinateUtils.getChunkKey(dx + chunkX, dz + chunkZ);
++
++                    if (!shouldTrackChunk(CoordinateUtils.getChunkX(neighbour), CoordinateUtils.getChunkZ(neighbour))) {
++                        continue;
++                    }
++
+                     final byte stage = this.chunkTicketStage.get(neighbour);
+ 
+                     if (stage != CHUNK_TICKET_STAGE_GENERATED && stage != CHUNK_TICKET_STAGE_TICK) {
+@@ -1068,6 +1077,17 @@ public final class RegionizedPlayerChunkLoader {
+                 final int chunkZ = dz + currentChunkZ;
+                 final long chunk = CoordinateUtils.getChunkKey(chunkX, chunkZ);
+                 final int squareDistance = Math.max(Math.abs(dx), Math.abs(dz));
++
++                if (!shouldTrackChunk(chunkX, chunkZ)) {
++                    final boolean sent = this.sentChunks.remove(chunk);
++
++                    if (sent) {
++                        sendUnloadChunkRaw(chunkX, chunkZ);
++                    }
++
++                    continue;
++                }
++
+                 final int manhattanDistance = Math.abs(dx) + Math.abs(dz);
+ 
+                 // since chunk sending is not by radius alone, we need an extra check here to account for
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java
+index a48c84b53aac1d79567a276165d0ff3143bc667f..d677295a053ea3cc15272f1a2669343f0c55117e 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java
+@@ -383,6 +383,12 @@ public final class ChunkHolderManager {
+ 
+                 if (current == null) {
+                     // must create
++                    if (!ChunkHolderManager.this.world.leaf$shouldTrackChunk(CoordinateUtils.getChunkX(key), CoordinateUtils.getChunkZ(key))) {
++                        iterator.remove();
++
++                        continue;
++                    }
++
+                     current = ChunkHolderManager.this.createChunkHolder(key);
+                     ChunkHolderManager.this.chunkHoldersNoSync.put(key, current); // Leaf - thread unsafe chunk map
+                     ChunkHolderManager.this.chunkHolders.put(key, current);
+@@ -609,6 +615,10 @@ public final class ChunkHolderManager {
+ 
+         final int chunkX = CoordinateUtils.getChunkX(chunk);
+         final int chunkZ = CoordinateUtils.getChunkZ(chunk);
++        if (!world.leaf$shouldTrackChunk(chunkX, chunkZ)) {
++            return false;
++        }
++
+         final Ticket ticket = new Ticket(type, level, removeDelay);
+         ((ChunkSystemTicket<T>)(Object)ticket).moonrise$setIdentifier(identifier);
+ 
+@@ -955,7 +965,13 @@ public final class ChunkHolderManager {
+     }
+ 
+     private NewChunkHolder createChunkHolder(final long position) {
+-        final NewChunkHolder ret = new NewChunkHolder(this.world, CoordinateUtils.getChunkX(position), CoordinateUtils.getChunkZ(position), this.taskScheduler);
++        final int chunkX = CoordinateUtils.getChunkX(position);
++        final int chunkZ = CoordinateUtils.getChunkZ(position);
++        if (!world.leaf$shouldTrackChunk(chunkX, chunkZ)) {
++            throw new IllegalStateException("Cannot create chunk holder outside the world border: (" + chunkX + "," + chunkZ + ")");
++        }
++
++        final NewChunkHolder ret = new NewChunkHolder(this.world, chunkX, chunkZ, this.taskScheduler);
+ 
+         PlatformHooks.get().onChunkHolderCreate(this.world, ret.vanillaChunkHolder);
+ 
+@@ -972,6 +988,9 @@ public final class ChunkHolderManager {
+     private NewChunkHolder getOrCreateChunkHolder(final long position) {
+         final int chunkX = CoordinateUtils.getChunkX(position);
+         final int chunkZ = CoordinateUtils.getChunkZ(position);
++        if (!world.leaf$shouldTrackChunk(chunkX, chunkZ)) {
++            throw new IllegalStateException("Cannot create chunk holder outside the world border: (" + chunkX + "," + chunkZ + ")");
++        }
+ 
+         if (!this.ticketLockArea.isHeldByCurrentThread(chunkX, chunkZ)) {
+             throw new IllegalStateException("Must hold ticket level update lock!");
+@@ -998,6 +1017,10 @@ public final class ChunkHolderManager {
+ 
+     public ChunkEntitySlices getOrCreateEntityChunk(final int chunkX, final int chunkZ, final boolean transientChunk) {
+         TickThread.ensureTickThread(this.world, chunkX, chunkZ, "Cannot create entity chunk off-main");
++        if (!world.leaf$shouldTrackChunk(chunkX, chunkZ)) {
++            throw new IllegalStateException("Cannot create entity chunk outside the world border: (" + chunkX + "," + chunkZ + ")");
++        }
++
+         ChunkEntitySlices ret;
+ 
+         NewChunkHolder current = this.getChunkHolder(chunkX, chunkZ);
+@@ -1079,6 +1102,10 @@ public final class ChunkHolderManager {
+ 
+     public PoiChunk loadPoiChunk(final int chunkX, final int chunkZ) {
+         TickThread.ensureTickThread(this.world, chunkX, chunkZ, "Cannot create poi chunk off-main");
++        if (!world.leaf$shouldTrackChunk(chunkX, chunkZ)) {
++            throw new IllegalStateException("Cannot create poi chunk outside the world border: (" + chunkX + "," + chunkZ + ")");
++        }
++
+         PoiChunk ret;
+ 
+         NewChunkHolder current = this.getChunkHolder(chunkX, chunkZ);
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkTaskScheduler.java b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkTaskScheduler.java
+index 640548d78b87653871dd1f7b0f84574c5e205fe8..e1631770e1639cf9033742910324f5d1935b42b9 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkTaskScheduler.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkTaskScheduler.java
+@@ -384,6 +384,18 @@ public final class ChunkTaskScheduler {
+             throw new IllegalArgumentException("Cannot wait for INACCESSIBLE status");
+         }
+ 
++        if (!world.leaf$shouldTrackChunk(chunkX, chunkZ)) {
++            if (onComplete != null) {
++                try {
++                    onComplete.accept(null);
++                } catch (final Throwable thr) {
++                    LOGGER.error("Failed to process chunk full status callback", thr);
++                }
++            }
++
++            return;
++        }
++
+         final int minLevel = 33 - (toStatus.ordinal() - 1);
+         final Long chunkReference = addTicket ? getNextChunkLoadId() : null;
+         final long chunkKey = CoordinateUtils.getChunkKey(chunkX, chunkZ);
+@@ -483,6 +495,10 @@ public final class ChunkTaskScheduler {
+     // only appropriate to use with syncLoadNonFull
+     public boolean beginChunkLoadForNonFullSync(final int chunkX, final int chunkZ, final ChunkStatus toStatus,
+                                                 final Priority priority) {
++        if (!world.leaf$shouldTrackChunk(chunkX, chunkZ)) {
++            return false;
++        }
++
+         final int accessRadius = getAccessRadius(toStatus);
+         final long chunkKey = CoordinateUtils.getChunkKey(chunkX, chunkZ);
+         final int minLevel = ChunkTaskScheduler.getTicketLevel(toStatus);
+@@ -532,6 +548,12 @@ public final class ChunkTaskScheduler {
+             return this.world.getChunkSource().getChunk(chunkX, chunkZ, status, true);
+         }
+ 
++        if (!world.leaf$shouldTrackChunk(chunkX, chunkZ)) {
++            throw new IllegalStateException(
++                "Cannot sync load chunk outside the world border: (" + chunkX + "," + chunkZ + ") status: " + status
++            );
++        }
++
+         ChunkAccess loaded = ((ChunkSystemServerLevel)this.world).moonrise$getSpecificChunkIfLoaded(chunkX, chunkZ, status);
+         if (loaded != null) {
+             return loaded;
+@@ -589,6 +611,18 @@ public final class ChunkTaskScheduler {
+             return;
+         }
+ 
++        if (!world.leaf$shouldTrackChunk(chunkX, chunkZ)) {
++            if (onComplete != null) {
++                try {
++                    onComplete.accept(null);
++                } catch (final Throwable thr) {
++                    LOGGER.error("Failed to process chunk status callback", thr);
++                }
++            }
++
++            return;
++        }
++
+         final int minLevel = ChunkTaskScheduler.getTicketLevel(toStatus);
+         final Long chunkReference = addTicket ? getNextChunkLoadId() : null;
+         final long chunkKey = CoordinateUtils.getChunkKey(chunkX, chunkZ);
+diff --git a/net/minecraft/server/level/ServerLevel.java b/net/minecraft/server/level/ServerLevel.java
+index c30c53942005d230e73841c9e6bb4d05e746d866..887f7a168d4a515fc5fafec6398bfe6888949359 100644
+--- a/net/minecraft/server/level/ServerLevel.java
++++ b/net/minecraft/server/level/ServerLevel.java
+@@ -2566,6 +2566,24 @@ public class ServerLevel extends Level implements ServerEntityGetter, WorldGenLe
+         return worldBorder;
+     }
+ 
++    // Leaf start - Do not track chunks outside the world border
++    public final boolean leaf$shouldTrackChunk(final int chunkX, final int chunkZ) {
++        if (!galeConfig().smallOptimizations.loadChunks.preventTrackingOutsideWorldBorder) {
++            return true;
++        }
++
++        final WorldBorder worldBorder = getWorldBorder();
++
++        final int minBlockX = chunkX << 4;
++        final int maxBlockX = minBlockX + 15;
++        final int minBlockZ = chunkZ << 4;
++        final int maxBlockZ = minBlockZ + 15;
++
++        return maxBlockX >= (int) Math.floor(worldBorder.getMinX()) && minBlockX <= (int) Math.ceil(worldBorder.getMaxX()) - 1
++            && maxBlockZ >= (int) Math.floor(worldBorder.getMinZ()) && minBlockZ <= (int) Math.ceil(worldBorder.getMaxZ()) - 1;
++    }
++    // Leaf end - Do not track chunks outside the world border
++
+     @Override
+     public RecipeManager recipeAccess() {
+         return this.server.getRecipeManager();
