@@ -5,7 +5,7 @@ import org.dreeam.leaf.config.EnumConfigCategory;
 
 public class PreventPearlGlitch extends ConfigModules {
     public String getBasePath() {
-        return EnumConfigCategory.PERF.getBaseKeyName() + ".prevent-pearl-glitch";
+        return EnumConfigCategory.GAMEPLAY.getBaseKeyName() + ".prevent-pearl-glitch";
     }
 
     public static boolean enabled = false;

@@ -5,7 +5,7 @@ import org.dreeam.leaf.config.EnumConfigCategory;
 
 public class PlayerUpdateInterval extends ConfigModules {
     public String getBasePath() {
-        return EnumConfigCategory.PERF.getBaseKeyName();
+        return EnumConfigCategory.GAMEPLAY.getBaseKeyName();
     }
 
     public static int interval = -1;

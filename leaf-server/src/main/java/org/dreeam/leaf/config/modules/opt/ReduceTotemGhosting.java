@@ -5,7 +5,7 @@ import org.dreeam.leaf.config.EnumConfigCategory;
 
 public class ReduceTotemGhosting extends ConfigModules {
     public String getBasePath() {
-        return EnumConfigCategory.PERF.getBaseKeyName() + ".reduce-totem-ghosting";
+        return EnumConfigCategory.GAMEPLAY.getBaseKeyName() + ".reduce-totem-ghosting";
     }
 
     public static boolean enabled = true;

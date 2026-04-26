@@ -5,7 +5,7 @@ import org.dreeam.leaf.config.EnumConfigCategory;
 
 public class RetainPearlMomentum extends ConfigModules {
     public String getBasePath() {
-        return EnumConfigCategory.PERF.getBaseKeyName() + ".retain-pearl-momentum";
+        return EnumConfigCategory.GAMEPLAY.getBaseKeyName() + ".retain-pearl-momentum";
     }
 
     public static boolean enabled = true;
