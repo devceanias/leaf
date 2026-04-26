@@ -1,0 +1,118 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Sun, 26 Apr 2026 21:26:52 +1000
+Subject: [PATCH] add sound suppression
+
+
+diff --git a/net/minecraft/server/network/ServerCommonPacketListenerImpl.java b/net/minecraft/server/network/ServerCommonPacketListenerImpl.java
+index 0e1411d820caef8a6a80bca07d9c76e9615ff13e..12d93d8958822744874256f57d7ead8325e9403e 100644
+--- a/net/minecraft/server/network/ServerCommonPacketListenerImpl.java
++++ b/net/minecraft/server/network/ServerCommonPacketListenerImpl.java
+@@ -14,6 +14,8 @@ import net.minecraft.network.protocol.Packet;
+ import net.minecraft.network.protocol.PacketUtils;
+ import net.minecraft.network.protocol.common.ClientboundDisconnectPacket;
+ import net.minecraft.network.protocol.common.ClientboundKeepAlivePacket;
++import net.minecraft.network.protocol.game.ClientboundSoundEntityPacket;
++import net.minecraft.network.protocol.game.ClientboundSoundPacket;
+ import net.minecraft.network.protocol.common.ServerCommonPacketListener;
+ import net.minecraft.network.protocol.common.ServerboundCustomClickActionPacket;
+ import net.minecraft.network.protocol.common.ServerboundCustomPayloadPacket;
+@@ -27,6 +29,7 @@ import net.minecraft.server.players.NameAndId;
+ import net.minecraft.util.Util;
+ import net.minecraft.util.VisibleForDebug;
+ import net.minecraft.util.profiling.Profiler;
++import org.dreeam.leaf.config.modules.gameplay.ServerSoundTweaks;
+ import org.jspecify.annotations.Nullable;
+ import org.slf4j.Logger;
+ 
+@@ -380,6 +383,7 @@ public abstract class ServerCommonPacketListenerImpl implements ServerCommonPack
+         if (!org.dreeam.leaf.config.modules.network.ChatMessageSignature.enabled) {
+             if (packet instanceof net.minecraft.network.protocol.game.ClientboundPlayerChatPacket chat && sendListener != null) {
+                 this.send(chat);
++
+                 return;
+             }
+         }
+@@ -395,6 +399,18 @@ public abstract class ServerCommonPacketListenerImpl implements ServerCommonPack
+             this.close();
+         }
+ 
++        if (packet instanceof final ClientboundSoundPacket sound &&
++            ServerSoundTweaks.shouldSuppressSound(sound.getSound().value().location().toString())
++        ) {
++            return;
++        }
++
++        if (packet instanceof final ClientboundSoundEntityPacket sound &&
++            ServerSoundTweaks.shouldSuppressSound(sound.getSound().value().location().toString())
++        ) {
++            return;
++        }
++
+         boolean flag = !this.suspendFlushingOnServerThread || !this.server.isSameThread();
+ 
+         try {
+@@ -402,6 +418,7 @@ public abstract class ServerCommonPacketListenerImpl implements ServerCommonPack
+         } catch (Throwable var7) {
+             CrashReport crashReport = CrashReport.forThrowable(var7, "Sending packet");
+             CrashReportCategory crashReportCategory = crashReport.addCategory("Packet being sent");
++
+             crashReportCategory.setDetail("Packet class", () -> packet.getClass().getCanonicalName());
+             throw new ReportedException(crashReport);
+         }
+diff --git a/net/minecraft/world/entity/LivingEntity.java b/net/minecraft/world/entity/LivingEntity.java
+index c4b050c5fbb9e7f36b4b2e620b3271475b05ab1f..587a88ff690bf5e069310a820c5a99cca1c42def 100644
+--- a/net/minecraft/world/entity/LivingEntity.java
++++ b/net/minecraft/world/entity/LivingEntity.java
+@@ -140,6 +140,7 @@ import net.minecraft.world.scores.PlayerTeam;
+ import net.minecraft.world.scores.Scoreboard;
+ import net.minecraft.world.waypoints.Waypoint;
+ import net.minecraft.world.waypoints.WaypointTransmitter;
++import org.dreeam.leaf.config.modules.gameplay.ServerSoundTweaks;
+ import org.dreeam.leaf.config.modules.opt.ReduceTotemGhosting;
+ import org.jetbrains.annotations.Contract;
+ import org.jspecify.annotations.Nullable;
+@@ -1626,7 +1627,9 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+                 if (flag && blocksAttacks != null) {
+                     blocksAttacks.onBlocked(level, this);
+                 } else {
+-                    level.broadcastDamageEvent(this, damageSource);
++                    if (!(ServerSoundTweaks.skipLethalDamageEventPacket && this instanceof ServerPlayer && this.isDeadOrDying())) {
++                        level.broadcastDamageEvent(this, damageSource);
++                    }
+                 }
+ 
+                 if (!damageSource.is(DamageTypeTags.NO_IMPACT) && !flag) { // CraftBukkit - Prevent marking hurt if the damage is blocked
+diff --git a/net/minecraft/world/entity/player/Player.java b/net/minecraft/world/entity/player/Player.java
+index 30567dffd64bf9c1e323dd12deaecef97b45ff5d..86ca41f696a7d4129193a0079ba798e25537cf72 100644
+--- a/net/minecraft/world/entity/player/Player.java
++++ b/net/minecraft/world/entity/player/Player.java
+@@ -117,6 +117,7 @@ import net.minecraft.world.level.storage.ValueInput;
+ import net.minecraft.world.level.storage.ValueOutput;
+ import net.minecraft.world.phys.AABB;
+ import net.minecraft.world.phys.Vec3;
++import org.dreeam.leaf.config.modules.gameplay.ServerSoundTweaks;
+ import net.minecraft.world.scores.PlayerTeam;
+ import org.jspecify.annotations.Nullable;
+ 
+@@ -1113,6 +1114,9 @@ public abstract class Player extends Avatar implements ContainerUser {
+                     }
+ 
+                     Vec3 deltaMovement = target.getDeltaMovement();
++
++                    target.lastDamageCancelled = false;
++
+                     boolean flag3 = target.hurtOrSimulate(damageSource, f2);
+                     if (flag3) {
+                         this.causeExtraKnockback(target, this.getKnockback(target, damageSource) + (flag1 ? 0.5F : 0.0F), deltaMovement);
+@@ -1132,7 +1136,9 @@ public abstract class Player extends Avatar implements ContainerUser {
+                         }
+                         // Leaf end - Flush location while knockback
+                     } else {
+-                        this.playServerSideSound(SoundEvents.PLAYER_ATTACK_NODAMAGE);
++                        if (!target.lastDamageCancelled || ServerSoundTweaks.shouldPlayCancelledHitSounds) {
++                            playServerSideSound(SoundEvents.PLAYER_ATTACK_NODAMAGE);
++                        }
+                     }
+                 }
+ 
