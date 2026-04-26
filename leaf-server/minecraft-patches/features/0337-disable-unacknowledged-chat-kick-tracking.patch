@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Sun, 26 Apr 2026 16:29:42 +1000
+Subject: [PATCH] disable unacknowledged chat kick tracking
+
+
+diff --git a/net/minecraft/server/network/ServerGamePacketListenerImpl.java b/net/minecraft/server/network/ServerGamePacketListenerImpl.java
+index 859987b4063fa47a3f720c7836c2937411797c35..82ba03076d95e825be70cafc7aac2ffcb75a7f76 100644
+--- a/net/minecraft/server/network/ServerGamePacketListenerImpl.java
++++ b/net/minecraft/server/network/ServerGamePacketListenerImpl.java
+@@ -212,6 +212,8 @@ import net.minecraft.world.phys.shapes.BooleanOp;
+ import net.minecraft.world.phys.shapes.Shapes;
+ import net.minecraft.world.phys.shapes.VoxelShape;
+ import org.dreeam.leaf.config.modules.fixes.FixRightClickOffhandCooldown;
++import org.dreeam.leaf.config.modules.network.ChatMessageSignature;
++import org.dreeam.leaf.config.modules.network.DisableChatKick;
+ import org.jspecify.annotations.Nullable;
+ import org.slf4j.Logger;
+ 
+@@ -2900,7 +2902,7 @@ public class ServerGamePacketListenerImpl
+             )
+         );
+         MessageSignature messageSignature = chatMessage.signature();
+-        if (messageSignature != null) {
++        if (messageSignature != null && !DisableChatKick.enabled) {
+             this.messageSignatureCache.push(chatMessage.signedBody(), chatMessage.signature());
+             int i;
+             synchronized (this.lastSeenMessages) {
