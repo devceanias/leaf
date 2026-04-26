@@ -1,0 +1,151 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Sun, 26 Apr 2026 16:16:11 +1000
+Subject: [PATCH] fix right click cooldown resets
+
+
+diff --git a/net/minecraft/server/network/ServerGamePacketListenerImpl.java b/net/minecraft/server/network/ServerGamePacketListenerImpl.java
+index 2c824def972d5b9017090ecfcff816eed44e3676..859987b4063fa47a3f720c7836c2937411797c35 100644
+--- a/net/minecraft/server/network/ServerGamePacketListenerImpl.java
++++ b/net/minecraft/server/network/ServerGamePacketListenerImpl.java
+@@ -8,6 +8,7 @@ import com.mojang.brigadier.ParseResults;
+ import com.mojang.brigadier.StringReader;
+ import com.mojang.brigadier.suggestion.Suggestions;
+ import com.mojang.logging.LogUtils;
++import io.papermc.paper.configuration.GlobalConfiguration;
+ import it.unimi.dsi.fastutil.ints.Int2ObjectMaps;
+ import it.unimi.dsi.fastutil.ints.Int2ObjectMap.Entry;
+ import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
+@@ -200,7 +201,6 @@ import net.minecraft.world.level.block.entity.SignBlockEntity;
+ import net.minecraft.world.level.block.entity.StructureBlockEntity;
+ import net.minecraft.world.level.block.entity.TestBlockEntity;
+ import net.minecraft.world.level.block.entity.TestInstanceBlockEntity;
+-import net.minecraft.world.level.block.state.BlockBehaviour;
+ import net.minecraft.world.level.block.state.BlockState;
+ import net.minecraft.world.level.gamerules.GameRules;
+ import net.minecraft.world.level.material.Fluids;
+@@ -211,6 +211,7 @@ import net.minecraft.world.phys.Vec3;
+ import net.minecraft.world.phys.shapes.BooleanOp;
+ import net.minecraft.world.phys.shapes.Shapes;
+ import net.minecraft.world.phys.shapes.VoxelShape;
++import org.dreeam.leaf.config.modules.fixes.FixRightClickOffhandCooldown;
+ import org.jspecify.annotations.Nullable;
+ import org.slf4j.Logger;
+ 
+@@ -2032,7 +2033,7 @@ public class ServerGamePacketListenerImpl
+                         }
+                         // CraftBukkit end
+                         this.player.stopUsingItem();
+-                        if (io.papermc.paper.configuration.GlobalConfiguration.get().unsupportedSettings.updateEquipmentOnPlayerActions) this.player.detectEquipmentUpdates(); // Paper - Force update attributes.
++                        this.leaf$detectInteractionEquipmentUpdates(); // Paper - Force update attributes.
+                     }
+ 
+                     return;
+@@ -2067,7 +2068,7 @@ public class ServerGamePacketListenerImpl
+                     return;
+                 case RELEASE_USE_ITEM:
+                     this.player.releaseUsingItem();
+-                    if (io.papermc.paper.configuration.GlobalConfiguration.get().unsupportedSettings.updateEquipmentOnPlayerActions) this.player.detectEquipmentUpdates(); // Paper - Force update attributes.
++                    this.leaf$detectInteractionEquipmentUpdates(); // Paper - Force update attributes.
+                     return;
+                 case START_DESTROY_BLOCK:
+                 case ABORT_DESTROY_BLOCK:
+@@ -2143,6 +2144,26 @@ public class ServerGamePacketListenerImpl
+     }
+     // Paper end - limit place/interactions
+ 
++    private void leaf$detectInteractionEquipmentUpdates() {
++        if (!GlobalConfiguration.get().unsupportedSettings.updateEquipmentOnPlayerActions) {
++            return;
++        }
++
++        if (!FixRightClickOffhandCooldown.enabled) {
++            player.detectEquipmentUpdates();
++
++            return;
++        }
++
++        player.leaf$setIgnoreAttackCooldownReset(true);
++
++        try {
++            player.detectEquipmentUpdates();
++        } finally {
++            player.leaf$setIgnoreAttackCooldownReset(false);
++        }
++    }
++
+     @Override
+     public void handleUseItemOn(ServerboundUseItemOnPacket packet) {
+         PacketUtils.ensureRunningOnSameThread(packet, this, this.player.level());
+@@ -2209,7 +2230,7 @@ public class ServerGamePacketListenerImpl
+ 
+                         this.send(new ClientboundBlockUpdatePacket(serverLevel, blockPos));
+                         this.send(new ClientboundBlockUpdatePacket(serverLevel, blockPos.relative(direction)));
+-                        if (io.papermc.paper.configuration.GlobalConfiguration.get().unsupportedSettings.updateEquipmentOnPlayerActions) this.player.detectEquipmentUpdates(); // Paper - Force update attributes.
++                        this.leaf$detectInteractionEquipmentUpdates(); // Paper - Force update attributes.
+                         // Paper - Remove unused warning
+                     }
+                 }
+@@ -3076,7 +3097,11 @@ public class ServerGamePacketListenerImpl
+                 });
+             }
+             // Paper end - PlayerUseUnknownEntityEvent
+-            if (io.papermc.paper.configuration.GlobalConfiguration.get().unsupportedSettings.updateEquipmentOnPlayerActions) this.player.detectEquipmentUpdates(); // Paper - Force update attributes.
++            if (packet.isAttack()) {
++                if (GlobalConfiguration.get().unsupportedSettings.updateEquipmentOnPlayerActions) this.player.detectEquipmentUpdates(); // Paper - Force update attributes.
++            } else {
++                this.leaf$detectInteractionEquipmentUpdates(); // Paper - Force update attributes.
++            }
+         }
+     }
+ 
+diff --git a/net/minecraft/world/entity/player/Player.java b/net/minecraft/world/entity/player/Player.java
+index f8747851b7f38939591feb98b13c1d4eff3155f4..30567dffd64bf9c1e323dd12deaecef97b45ff5d 100644
+--- a/net/minecraft/world/entity/player/Player.java
++++ b/net/minecraft/world/entity/player/Player.java
+@@ -42,7 +42,6 @@ import net.minecraft.stats.Stats;
+ import net.minecraft.tags.BlockTags;
+ import net.minecraft.tags.DamageTypeTags;
+ import net.minecraft.tags.EntityTypeTags;
+-import net.minecraft.tags.FluidTags;
+ import net.minecraft.tags.ItemTags;
+ import net.minecraft.util.Mth;
+ import net.minecraft.util.Unit;
+@@ -119,7 +118,6 @@ import net.minecraft.world.level.storage.ValueOutput;
+ import net.minecraft.world.phys.AABB;
+ import net.minecraft.world.phys.Vec3;
+ import net.minecraft.world.scores.PlayerTeam;
+-import net.minecraft.world.scores.Team;
+ import org.jspecify.annotations.Nullable;
+ 
+ public abstract class Player extends Avatar implements ContainerUser {
+@@ -163,6 +161,9 @@ public abstract class Player extends Avatar implements ContainerUser {
+     public int experienceLevel = 0;
+     public int totalExperience = 0;
+     public float experienceProgress = 0.0F;
++
++    private boolean leaf$ignoreAttackCooldownReset;
++
+     public int enchantmentSeed = 0;
+     protected final float defaultFlySpeed = 0.02F;
+     private int lastLevelUpTime;
+@@ -2086,7 +2087,7 @@ public abstract class Player extends Avatar implements ContainerUser {
+         // Copied from the tick method
+         ItemStack mainHandItem = this.getMainHandItem();
+         if (!ItemStack.matches(this.lastItemInMainHand, mainHandItem)) {
+-            if (!ItemStack.isSameItem(this.lastItemInMainHand, mainHandItem)) {
++            if (!this.leaf$ignoreAttackCooldownReset && !ItemStack.isSameItem(this.lastItemInMainHand, mainHandItem)) {
+                 this.resetAttackStrengthTicker();
+             }
+ 
+@@ -2095,6 +2096,10 @@ public abstract class Player extends Avatar implements ContainerUser {
+     }
+     // Paper end - Force update attributes.
+ 
++    public void leaf$setIgnoreAttackCooldownReset(final boolean ignore) {
++        leaf$ignoreAttackCooldownReset = ignore;
++    }
++
+     public void resetOnlyAttackStrengthTicker() {
+         this.attackStrengthTicker = 0;
+     }
