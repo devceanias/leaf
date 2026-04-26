@@ -4,6 +4,34 @@ Date: Sat, 25 Apr 2026 17:55:47 +1000
 Subject: [PATCH] add preventTrackingOutsideWorldBorder
 
 
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/MoonriseChunkLoadCounter.java b/ca/spottedleaf/moonrise/patches/chunk_system/MoonriseChunkLoadCounter.java
+index f77ba1b6aaedf6c8c1e0c49ff2779eb42b8eb90d..c847d819b3de145d914f83cdbdfe1b80d36f908d 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/MoonriseChunkLoadCounter.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/MoonriseChunkLoadCounter.java
+@@ -27,7 +27,22 @@ public final class MoonriseChunkLoadCounter extends ChunkLoadCounter {
+         final Priority priority,
+         final Runnable done
+     ) {
+-        this.expected = (chunkRadius * 2 + 1) * (chunkRadius * 2 + 1);
++        int expected = 0;
++
++        for (int chunkX = chunkPos.x - chunkRadius; chunkX <= chunkPos.x + chunkRadius; ++chunkX) {
++            for (int chunkZ = chunkPos.z - chunkRadius; chunkZ <= chunkPos.z + chunkRadius; ++chunkZ) {
++                if (!level.leaf$shouldTrackChunk(chunkX, chunkZ)) {
++                    continue;
++                }
++
++                expected++;
++            }
++        }
++
++        this.expected = expected;
++
++        loaded.set(0);
++
+         final CompletableFuture<?> ret = new CompletableFuture<>();
+         ((ChunkSystemServerLevel) level).moonrise$loadChunksAsync(
+             chunkPos.x - chunkRadius,
 diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/player/RegionizedPlayerChunkLoader.java b/ca/spottedleaf/moonrise/patches/chunk_system/player/RegionizedPlayerChunkLoader.java
 index 0a6fbbe4097ea3619f5b2601d38ac13543642e31..4adb2394cf05e23f43367dc0ecf1e1623919d497 100644
 --- a/ca/spottedleaf/moonrise/patches/chunk_system/player/RegionizedPlayerChunkLoader.java
@@ -125,10 +153,98 @@ index a48c84b53aac1d79567a276165d0ff3143bc667f..d677295a053ea3cc15272f1a2669343f
  
          NewChunkHolder current = this.getChunkHolder(chunkX, chunkZ);
 diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkTaskScheduler.java b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkTaskScheduler.java
-index 640548d78b87653871dd1f7b0f84574c5e205fe8..e1631770e1639cf9033742910324f5d1935b42b9 100644
+index 640548d78b87653871dd1f7b0f84574c5e205fe8..b784c5ae99b60240138e4c9d46f5e69cc7143c41 100644
 --- a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkTaskScheduler.java
 +++ b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkTaskScheduler.java
-@@ -384,6 +384,18 @@ public final class ChunkTaskScheduler {
+@@ -44,10 +44,13 @@ import net.minecraft.world.level.ChunkPos;
+ import net.minecraft.world.level.Level;
+ import net.minecraft.world.level.chunk.ChunkAccess;
+ import net.minecraft.world.level.chunk.LevelChunk;
++import net.minecraft.world.level.chunk.ProtoChunk;
++import net.minecraft.world.level.chunk.UpgradeData;
+ import net.minecraft.world.level.chunk.status.ChunkPyramid;
+ import net.minecraft.world.level.chunk.status.ChunkStatus;
+ import net.minecraft.world.level.chunk.status.ChunkStep;
+ import net.minecraft.world.phys.Vec3;
++import org.jspecify.annotations.NonNull;
+ import org.slf4j.Logger;
+ import java.io.File;
+ import java.time.LocalDateTime;
+@@ -58,6 +61,7 @@ import java.util.Arrays;
+ import java.util.List;
+ import java.util.Map;
+ import java.util.Objects;
++import java.util.concurrent.CompletableFuture;
+ import java.util.concurrent.atomic.AtomicBoolean;
+ import java.util.concurrent.atomic.AtomicLong;
+ import java.util.function.Consumer;
+@@ -255,6 +259,65 @@ public final class ChunkTaskScheduler {
+         return (status.ordinal() - 1) + getAccessRadius(ChunkStatus.FULL);
+     }
+ 
++    private static final class VirtualBorderGenerationChunkHolder extends GenerationChunkHolder {
++        private final ChunkAccess chunk;
++
++        private VirtualBorderGenerationChunkHolder(final ServerLevel world, final int chunkX, final int chunkZ) {
++            super(new ChunkPos(chunkX, chunkZ));
++
++            final ProtoChunk chunk = new ProtoChunk(
++                pos, UpgradeData.EMPTY, world, world.palettedContainerFactory(), null
++            );
++
++            chunk.setPersistedStatus(ChunkStatus.FULL);
++
++            this.chunk = chunk;
++        }
++
++        @Override
++        protected void addSaveDependency(final @NonNull CompletableFuture<?> saveDependency) {}
++
++        @Override
++        public void increaseGenerationRefCount() {}
++
++        @Override
++        public void decreaseGenerationRefCount() {}
++
++        @Override
++        public ChunkAccess getChunkIfPresentUnchecked(final @NonNull ChunkStatus status) {
++            return chunk;
++        }
++
++        @Override
++        public ChunkAccess getChunkIfPresent(final @NonNull ChunkStatus status) {
++            return chunk;
++        }
++
++        @Override
++        public ChunkAccess getLatestChunk() {
++            return chunk;
++        }
++
++        @Override
++        public ChunkStatus getPersistedStatus() {
++            return chunk.getPersistedStatus();
++        }
++
++        @Override
++        public @NonNull FullChunkStatus getFullStatus() {
++            return FullChunkStatus.INACCESSIBLE;
++        }
++
++        @Override
++        public int getTicketLevel() {
++            return ChunkLevel.byStatus(ChunkStatus.FULL);
++        }
++
++        @Override
++        public int getQueueLevel() {
++            return 0;
++        }
++    }
+ 
+     public final ReentrantAreaLock schedulingLockArea;
+     private final int lockShift;
+@@ -384,6 +447,18 @@ public final class ChunkTaskScheduler {
              throw new IllegalArgumentException("Cannot wait for INACCESSIBLE status");
          }
  
@@ -147,7 +263,7 @@ index 640548d78b87653871dd1f7b0f84574c5e205fe8..e1631770e1639cf9033742910324f5d1
          final int minLevel = 33 - (toStatus.ordinal() - 1);
          final Long chunkReference = addTicket ? getNextChunkLoadId() : null;
          final long chunkKey = CoordinateUtils.getChunkKey(chunkX, chunkZ);
-@@ -483,6 +495,10 @@ public final class ChunkTaskScheduler {
+@@ -483,6 +558,10 @@ public final class ChunkTaskScheduler {
      // only appropriate to use with syncLoadNonFull
      public boolean beginChunkLoadForNonFullSync(final int chunkX, final int chunkZ, final ChunkStatus toStatus,
                                                  final Priority priority) {
@@ -158,7 +274,7 @@ index 640548d78b87653871dd1f7b0f84574c5e205fe8..e1631770e1639cf9033742910324f5d1
          final int accessRadius = getAccessRadius(toStatus);
          final long chunkKey = CoordinateUtils.getChunkKey(chunkX, chunkZ);
          final int minLevel = ChunkTaskScheduler.getTicketLevel(toStatus);
-@@ -532,6 +548,12 @@ public final class ChunkTaskScheduler {
+@@ -532,6 +611,12 @@ public final class ChunkTaskScheduler {
              return this.world.getChunkSource().getChunk(chunkX, chunkZ, status, true);
          }
  
@@ -171,7 +287,7 @@ index 640548d78b87653871dd1f7b0f84574c5e205fe8..e1631770e1639cf9033742910324f5d1
          ChunkAccess loaded = ((ChunkSystemServerLevel)this.world).moonrise$getSpecificChunkIfLoaded(chunkX, chunkZ, status);
          if (loaded != null) {
              return loaded;
-@@ -589,6 +611,18 @@ public final class ChunkTaskScheduler {
+@@ -589,6 +674,18 @@ public final class ChunkTaskScheduler {
              return;
          }
  
@@ -190,8 +306,80 @@ index 640548d78b87653871dd1f7b0f84574c5e205fe8..e1631770e1639cf9033742910324f5d1
          final int minLevel = ChunkTaskScheduler.getTicketLevel(toStatus);
          final Long chunkReference = addTicket ? getNextChunkLoadId() : null;
          final long chunkKey = CoordinateUtils.getChunkKey(chunkX, chunkZ);
+@@ -677,6 +774,10 @@ public final class ChunkTaskScheduler {
+         return new ChunkUpgradeGenericStatusTask(this, this.world, chunkX, chunkZ, chunk, neighbours, toStatus, initialPriority);
+     }
+ 
++    private boolean shouldUseBorderChunk(final int chunkX, final int chunkZ) {
++        return !world.leaf$shouldTrackChunk(chunkX, chunkZ);
++    }
++
+     ChunkProgressionTask schedule(final int chunkX, final int chunkZ, final ChunkStatus targetStatus, final NewChunkHolder chunkHolder,
+                                   final List<ChunkProgressionTask> allTasks) {
+         return this.schedule(chunkX, chunkZ, targetStatus, chunkHolder, allTasks, chunkHolder.getEffectivePriority(Priority.NORMAL));
+@@ -768,10 +869,25 @@ public final class ChunkTaskScheduler {
+         final List<NewChunkHolder> chunkHolderNeighbours = new ArrayList<>((2 * neighbourReadRadius + 1) * (2 * neighbourReadRadius + 1));
+         final StaticCache2D<GenerationChunkHolder> neighbours = StaticCache2D
+                 .create(chunkX, chunkZ, neighbourReadRadius, (final int nx, final int nz) -> {
+-                    final NewChunkHolder holder = nx == chunkX && nz == chunkZ ? chunkHolder : this.chunkHolderManager.getChunkHolder(nx, nz);
+-                    chunkHolderNeighbours.add(holder);
++                    if (nx == chunkX && nz == chunkZ) {
++                        chunkHolderNeighbours.add(chunkHolder);
++
++                        return chunkHolder.vanillaChunkHolder;
++                    }
++
++                    final NewChunkHolder holder = chunkHolderManager.getChunkHolder(nx, nz);
+ 
+-                    return holder.vanillaChunkHolder;
++                    if (holder != null) {
++                        chunkHolderNeighbours.add(holder);
++
++                        return holder.vanillaChunkHolder;
++                    }
++
++                    if (shouldUseBorderChunk(nx, nz)) {
++                        return new VirtualBorderGenerationChunkHolder(this.world, nx, nz);
++                    }
++
++                    throw new IllegalStateException("Missing chunkholder when gathering generation neighbours");
+                 });
+ 
+         final ChunkProgressionTask task = this.createTask(
+@@ -788,8 +904,11 @@ public final class ChunkTaskScheduler {
+     // rets true if the neighbour is not at the required status, false otherwise
+     private boolean checkNeighbour(final int chunkX, final int chunkZ, final ChunkStatus requiredStatus, final NewChunkHolder center,
+                                    final List<ChunkProgressionTask> tasks, final Priority minPriority) {
+-        final NewChunkHolder chunkHolder = this.chunkHolderManager.getChunkHolder(chunkX, chunkZ);
++        if (shouldUseBorderChunk(chunkX, chunkZ)) {
++            return false;
++        }
+ 
++        final NewChunkHolder chunkHolder = this.chunkHolderManager.getChunkHolder(chunkX, chunkZ);
+         if (chunkHolder == null) {
+             throw new IllegalStateException("Missing chunkholder when required");
+         }
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/NewChunkHolder.java b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/NewChunkHolder.java
+index 9a9a599ef178f851ee5c783631a724013a693586..679ee3e19236bb5b131dc0e64991e85daea01b77 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/NewChunkHolder.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/NewChunkHolder.java
+@@ -1169,6 +1169,14 @@ public final class NewChunkHolder {
+                 for (int dx = -NEIGHBOUR_RADIUS; dx <= NEIGHBOUR_RADIUS; ++dx) {
+                     final NewChunkHolder holder = (dx | dz) == 0 ? this : this.scheduler.chunkHolderManager.getChunkHolder(dx + this.chunkX, dz + this.chunkZ);
+                     if (loaded) {
++                        if (holder == null) {
++                            if (!world.leaf$shouldTrackChunk(dx + chunkX, dz + chunkZ)) {
++                                continue;
++                            }
++
++                            throw new IllegalStateException("Missing chunkholder when updating full loaded neighbours");
++                        }
++
+                         if (holder.setNeighbourFullLoaded(-dx, -dz)) {
+                             changedFullStatus.add(holder);
+                         }
 diff --git a/net/minecraft/server/level/ServerLevel.java b/net/minecraft/server/level/ServerLevel.java
-index c30c53942005d230e73841c9e6bb4d05e746d866..887f7a168d4a515fc5fafec6398bfe6888949359 100644
+index c30c53942005d230e73841c9e6bb4d05e746d866..5e6005e64482d201c4fa065e7c994a2b656e9b11 100644
 --- a/net/minecraft/server/level/ServerLevel.java
 +++ b/net/minecraft/server/level/ServerLevel.java
 @@ -2566,6 +2566,24 @@ public class ServerLevel extends Level implements ServerEntityGetter, WorldGenLe
@@ -219,3 +407,14 @@ index c30c53942005d230e73841c9e6bb4d05e746d866..887f7a168d4a515fc5fafec6398bfe68
      @Override
      public RecipeManager recipeAccess() {
          return this.server.getRecipeManager();
+@@ -2928,6 +2946,10 @@ public class ServerLevel extends Level implements ServerEntityGetter, WorldGenLe
+             //this.entityManager.processPendingLoads(); // Paper - rewrite chunk system
+ 
+             for (ChunkPos chunkPos1 : list) {
++                if (!leaf$shouldTrackChunk(chunkPos1.x, chunkPos1.z)) {
++                    continue;
++                }
++
+                 if (!this.areEntitiesLoaded(chunkPos1.toLong())) {
+                     return false;
+                 }
