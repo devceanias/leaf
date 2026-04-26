@@ -1,0 +1,120 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Sun, 26 Apr 2026 14:47:51 +1000
+Subject: [PATCH] remove excess vehicle stacks during collisions
+
+
+diff --git a/net/minecraft/world/entity/vehicle/boat/AbstractBoat.java b/net/minecraft/world/entity/vehicle/boat/AbstractBoat.java
+index d2e910e6bdf06deeecf8cfb6c256e2d17e07ab04..6df6a16aeaff1950e24fcfcd7107821cf1389657 100644
+--- a/net/minecraft/world/entity/vehicle/boat/AbstractBoat.java
++++ b/net/minecraft/world/entity/vehicle/boat/AbstractBoat.java
+@@ -46,6 +46,7 @@ import net.minecraft.world.phys.Vec3;
+ import net.minecraft.world.phys.shapes.BooleanOp;
+ import net.minecraft.world.phys.shapes.Shapes;
+ import net.minecraft.world.phys.shapes.VoxelShape;
++import org.dreeam.leaf.util.ExcessVehicles;
+ import org.jspecify.annotations.Nullable;
+ 
+ public abstract class AbstractBoat extends VehicleEntity implements Leashable {
+@@ -320,7 +321,10 @@ public abstract class AbstractBoat extends VehicleEntity implements Leashable {
+             }
+         }
+ 
+-        List<Entity> entities = this.level().getEntities(this, this.getBoundingBox().inflate(0.2F, -0.01F, 0.2F), EntitySelector.pushableBy(this));
++        final List<Entity> entities = this.level().getEntities(this, this.getBoundingBox().inflate(0.2F, -0.01F, 0.2F), EntitySelector.pushableBy(this));
++
++        ExcessVehicles.trimBoats(this, entities);
++
+         if (!entities.isEmpty()) {
+             boolean flag = !this.level().isClientSide() && !(this.getControllingPassenger() instanceof Player);
+ 
+diff --git a/net/minecraft/world/entity/vehicle/minecart/NewMinecartBehavior.java b/net/minecraft/world/entity/vehicle/minecart/NewMinecartBehavior.java
+index d8af30d57cfe7b3e7ee8620aaaf20b0d7849fe6d..438cfcc7a568242b561adf199dfbd663bde66273 100644
+--- a/net/minecraft/world/entity/vehicle/minecart/NewMinecartBehavior.java
++++ b/net/minecraft/world/entity/vehicle/minecart/NewMinecartBehavior.java
+@@ -24,6 +24,7 @@ import net.minecraft.world.level.block.state.properties.RailShape;
+ import net.minecraft.world.level.gamerules.GameRules;
+ import net.minecraft.world.phys.AABB;
+ import net.minecraft.world.phys.Vec3;
++import org.dreeam.leaf.util.ExcessVehicles;
+ import org.jspecify.annotations.Nullable;
+ 
+ public class NewMinecartBehavior extends MinecartBehavior {
+@@ -558,7 +559,10 @@ public class NewMinecartBehavior extends MinecartBehavior {
+         boolean flag = false;
+         final boolean hasVehicleEntityCollisionEvent = org.bukkit.event.vehicle.VehicleEntityCollisionEvent.getHandlerList().getRegisteredListeners().length > 0; // Leaf - Skip VehicleEntityCollisionEvent if no listeners
+         if (this.minecart.isRideable()) {
+-            List<Entity> entities = this.level().getEntities(this.minecart, box, EntitySelector.pushableBy(this.minecart));
++            final List<Entity> entities = this.level().getEntities(this.minecart, box, EntitySelector.pushableBy(this.minecart));
++
++            ExcessVehicles.trimMinecarts(this.minecart, entities);
++
+             if (!entities.isEmpty()) {
+                 for (Entity entity : entities) {
+                     if (entity instanceof Player
+@@ -583,7 +587,11 @@ public class NewMinecartBehavior extends MinecartBehavior {
+                 }
+             }
+         } else {
+-            for (Entity entity1 : this.level().getEntities(this.minecart, box)) {
++            final List<Entity> entities = this.level().getEntities(this.minecart, box);
++
++            ExcessVehicles.trimMinecarts(this.minecart, entities);
++
++            for (Entity entity1 : entities) {
+                 if (!this.minecart.hasPassenger(entity1) && entity1.isPushable() && entity1 instanceof AbstractMinecart) {
+                     // CraftBukkit start
+                     if (hasVehicleEntityCollisionEvent) { // Leaf - Skip VehicleEntityCollisionEvent if no listeners
+@@ -605,6 +613,7 @@ public class NewMinecartBehavior extends MinecartBehavior {
+         return flag;
+     }
+ 
++
+     public record MinecartStep(Vec3 position, Vec3 movement, float yRot, float xRot, float weight) {
+         public static final StreamCodec<ByteBuf, NewMinecartBehavior.MinecartStep> STREAM_CODEC = StreamCodec.composite(
+             Vec3.STREAM_CODEC,
+diff --git a/net/minecraft/world/entity/vehicle/minecart/OldMinecartBehavior.java b/net/minecraft/world/entity/vehicle/minecart/OldMinecartBehavior.java
+index ff452325689bde16f1e4fd5ada645a31481df47d..31e810d4a41645cc1bd26354f791e69b17bd56fa 100644
+--- a/net/minecraft/world/entity/vehicle/minecart/OldMinecartBehavior.java
++++ b/net/minecraft/world/entity/vehicle/minecart/OldMinecartBehavior.java
+@@ -22,6 +22,7 @@ import net.minecraft.world.level.block.state.BlockState;
+ import net.minecraft.world.level.block.state.properties.RailShape;
+ import net.minecraft.world.phys.AABB;
+ import net.minecraft.world.phys.Vec3;
++import org.dreeam.leaf.util.ExcessVehicles;
+ import org.jspecify.annotations.Nullable;
+ 
+ public class OldMinecartBehavior extends MinecartBehavior {
+@@ -369,7 +370,10 @@ public class OldMinecartBehavior extends MinecartBehavior {
+         AABB aabb = this.minecart.getBoundingBox().inflate(0.2F, 0.0, 0.2F);
+         final boolean hasVehicleEntityCollisionEvent = org.bukkit.event.vehicle.VehicleEntityCollisionEvent.getHandlerList().getRegisteredListeners().length > 0; // Leaf - Skip VehicleEntityCollisionEvent if no listeners
+         if (this.minecart.isRideable() && this.getDeltaMovement().horizontalDistanceSqr() >= 0.01) {
+-            List<Entity> entities = this.level().getEntities(this.minecart, aabb, EntitySelector.pushableBy(this.minecart));
++            final List<Entity> entities = this.level().getEntities(this.minecart, aabb, EntitySelector.pushableBy(this.minecart));
++
++            ExcessVehicles.trimMinecarts(this.minecart, entities);
++
+             if (!entities.isEmpty()) {
+                 for (Entity entity : entities) {
+                     if (!(entity instanceof Player)
+@@ -400,7 +404,11 @@ public class OldMinecartBehavior extends MinecartBehavior {
+                 }
+             }
+         } else {
+-            for (Entity entity1 : this.level().getEntities(this.minecart, aabb)) {
++            final List<Entity> entities = this.level().getEntities(this.minecart, aabb);
++
++            ExcessVehicles.trimMinecarts(this.minecart, entities);
++
++            for (Entity entity1 : entities) {
+                 if (!this.minecart.hasPassenger(entity1) && entity1.isPushable() && entity1 instanceof AbstractMinecart) {
+                     // CraftBukkit start
+                     if (hasVehicleEntityCollisionEvent) { // Leaf - Skip VehicleEntityCollisionEvent if no listeners
+@@ -418,6 +426,7 @@ public class OldMinecartBehavior extends MinecartBehavior {
+         return false;
+     }
+ 
++
+     @Override
+     public Direction getMotionDirection() {
+         return this.minecart.isFlipped() ? this.minecart.getDirection().getOpposite().getClockWise() : this.minecart.getDirection().getClockWise();
