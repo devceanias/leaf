@@ -6,6 +6,8 @@ import com.mojang.logging.LogUtils;
 import io.papermc.paper.configuration.Configuration;
 import io.papermc.paper.configuration.ConfigurationPart;
 import io.papermc.paper.configuration.PaperConfigurations;
+import java.util.List;
+import net.minecraft.world.entity.EntityType;
 import net.minecraft.resources.Identifier;
 import org.slf4j.Logger;
 import org.spigotmc.SpigotWorldConfig;
@@ -37,7 +39,7 @@ public class GaleWorldConfiguration extends ConfigurationPart {
 
         public boolean saveFireworks = true; // Gale - EMC - make saving fireworks configurable
         public boolean useOptimizedSheepOffspringColor = true; // Gale - carpet-fixes - optimize sheep offspring color
-        public boolean applyFakebright = false; // Leaf - use fake fullbright data instead of per-chunk light
+        public boolean applyFakebright = true; // Leaf - use fake fullbright data instead of per-chunk light
 
         // Gale start - Airplane - reduce projectile chunk loading
         public MaxProjectileChunkLoads maxProjectileChunkLoads;
@@ -111,8 +113,25 @@ public class GaleWorldConfiguration extends ConfigurationPart {
             public boolean toSpawnPhantoms = false; // Gale - MultiPaper - don't load chunks to spawn phantoms
             public boolean toActivateClimbingEntities = false; // Gale - don't load chunks to activate climbing entities
             public boolean preventTrackingOutsideWorldBorder = false; // Leaf - don't track outside world border
-        }
 
+            public List<EntityType<?>> entities = List.of(
+                EntityType.ARROW,
+                EntityType.TRIDENT,
+                EntityType.ENDER_PEARL,
+                EntityType.WIND_CHARGE,
+                EntityType.FALLING_BLOCK,
+                EntityType.PUFFERFISH,
+                EntityType.TNT,
+                EntityType.TNT_MINECART,
+                EntityType.ITEM,
+                EntityType.EXPERIENCE_BOTTLE,
+                EntityType.SNOWBALL,
+                EntityType.SPLASH_POTION,
+                EntityType.LINGERING_POTION,
+                EntityType.CREEPER,
+                EntityType.FIREWORK_ROCKET
+            );
+        }
     }
 
     public GameplayMechanics gameplayMechanics;

@@ -1,0 +1,129 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Sun, 26 Apr 2026 17:25:02 +1000
+Subject: [PATCH] add moving entity chunk load allowlist
+
+
+diff --git a/net/minecraft/world/entity/Entity.java b/net/minecraft/world/entity/Entity.java
+index 4575c9664f294247749e982f8426c23966be4b0f..a3c87b6df5a046c64b548652730d46684a5f1a02 100644
+--- a/net/minecraft/world/entity/Entity.java
++++ b/net/minecraft/world/entity/Entity.java
+@@ -2,7 +2,6 @@ package net.minecraft.world.entity;
+ 
+ import com.google.common.collect.ImmutableList;
+ import com.google.common.collect.Lists;
+-import com.google.common.collect.Sets;
+ import com.google.common.collect.ImmutableList.Builder;
+ import com.mojang.logging.LogUtils;
+ import com.mojang.serialization.Codec;
+@@ -11,13 +10,11 @@ import it.unimi.dsi.fastutil.floats.FloatArrays;
+ import it.unimi.dsi.fastutil.floats.FloatSet;
+ import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+ import it.unimi.dsi.fastutil.longs.LongSet;
+-import it.unimi.dsi.fastutil.objects.Object2DoubleArrayMap;
+ import it.unimi.dsi.fastutil.objects.Object2DoubleMap;
+ import it.unimi.dsi.fastutil.objects.ObjectArrayList;
+ import java.util.ArrayDeque;
+ import java.util.ArrayList;
+ import java.util.Arrays;
+-import java.util.HashSet;
+ import java.util.List;
+ import java.util.Locale;
+ import java.util.Objects;
+@@ -111,7 +108,6 @@ import net.minecraft.world.level.ItemLike;
+ import net.minecraft.world.level.Level;
+ import net.minecraft.world.level.block.Block;
+ import net.minecraft.world.level.block.Blocks;
+-import net.minecraft.world.level.block.FenceGateBlock;
+ import net.minecraft.world.level.block.HoneyBlock;
+ import net.minecraft.world.level.block.Mirror;
+ import net.minecraft.world.level.block.Portal;
+@@ -1219,6 +1215,10 @@ public abstract class Entity implements SyncedDataHolder, DebugValueSource, Name
+         final Vec3 originalMovement = movement; // Paper - Expose pre-collision velocity
+         ca.spottedleaf.moonrise.common.util.TickThread.ensureTickThread("Cannot move an entity off-main");
+         if (this.noPhysics) {
++            if (!canMoveTo(getX() + movement.x, getZ() + movement.z)) {
++                return;
++            }
++
+             this.setPos(this.getX() + movement.x, this.getY() + movement.y, this.getZ() + movement.z);
+             this.horizontalCollision = false;
+             this.verticalCollision = false;
+@@ -1277,6 +1277,13 @@ public abstract class Entity implements SyncedDataHolder, DebugValueSource, Name
+ 
+                 Vec3 vec32 = this.position();
+                 Vec3 vec33 = vec32.add(vec3);
++
++                if (!canMoveTo(vec33.x, vec33.z)) {
++                    profilerFiller.pop();
++
++                    return;
++                }
++
+                 this.addMovementThisTick(new Entity.Movement(vec32, vec33, movement));
+                 this.setPos(vec33);
+             }
+@@ -1363,6 +1370,28 @@ public abstract class Entity implements SyncedDataHolder, DebugValueSource, Name
+         }
+     }
+ 
++    protected final boolean canMoveTo(final double x, final double z) {
++        if (!(level() instanceof final ServerLevel server)) {
++            return true;
++        }
++
++        final int oldX = Mth.floor(this.getX()) >> 4;
++        final int oldZ = Mth.floor(this.getZ()) >> 4;
++
++        final int newX = Mth.floor(x) >> 4;
++        final int newZ = Mth.floor(z) >> 4;
++
++        if (oldX == newX && oldZ == newZ) {
++            return true;
++        }
++
++        if (server.getChunkSource().getChunkAtIfLoadedImmediately(newX, newZ) != null) {
++            return true;
++        }
++
++        return server.galeConfig().smallOptimizations.loadChunks.entities.contains(getType());
++    }
++
+     private void applyMovementEmissionAndPlaySound(Entity.MovementEmission movementEmission, Vec3 movement, BlockPos pos, BlockState state) {
+         float f = 0.6F;
+         float f1 = (float)(movement.length() * 0.6F);
+diff --git a/net/minecraft/world/entity/projectile/Projectile.java b/net/minecraft/world/entity/projectile/Projectile.java
+index f1ef94b095c16ef0ba44c34167cf0ab3d15c4f9e..52ede0bb58b6ace2c35f2e8bad6f7243953804c1 100644
+--- a/net/minecraft/world/entity/projectile/Projectile.java
++++ b/net/minecraft/world/entity/projectile/Projectile.java
+@@ -9,6 +9,7 @@ import net.minecraft.network.protocol.game.ClientGamePacketListener;
+ import net.minecraft.network.protocol.game.ClientboundAddEntityPacket;
+ import net.minecraft.server.level.ServerEntity;
+ import net.minecraft.server.level.ServerLevel;
++import net.minecraft.server.level.ServerChunkCache;
+ import net.minecraft.tags.EntityTypeTags;
+ import net.minecraft.util.Mth;
+ import net.minecraft.world.damagesource.DamageSource;
+@@ -66,11 +67,19 @@ public abstract class Projectile extends Entity implements TraceableEntity {
+             chunksLoadedThisTick = 0;
+         }
+ 
+-        int previousX = Mth.floor(this.getX()) >> 4, previousZ = Mth.floor(this.getZ()) >> 4;
+-        int newX = Mth.floor(x) >> 4, newZ = Mth.floor(z) >> 4;
++        final int previousX = Mth.floor(getX()) >> 4;
++        final int previousZ = Mth.floor(getZ()) >> 4;
++
++        final int newX = Mth.floor(x) >> 4;
++        final int newZ = Mth.floor(z) >> 4;
+ 
+         if (previousX != newX || previousZ != newZ) {
+-            boolean isLoaded = ((net.minecraft.server.level.ServerChunkCache) this.level().getChunkSource()).getChunkAtIfLoadedImmediately(newX, newZ) != null;
++            if (!canMoveTo(x, z)) {
++                return;
++            }
++
++            final ServerChunkCache chunkSource = (ServerChunkCache) level().getChunkSource();
++            final boolean isLoaded = chunkSource.getChunkAtIfLoadedImmediately(newX, newZ) != null;
+ 
+             if (!isLoaded) {
+                 var maxProjectileChunkLoadsConfig = this.level().galeConfig().smallOptimizations.maxProjectileChunkLoads;
