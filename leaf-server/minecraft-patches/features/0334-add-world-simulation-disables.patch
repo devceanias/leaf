@@ -1,0 +1,109 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Sun, 26 Apr 2026 15:12:44 +1000
+Subject: [PATCH] add world simulation disables
+
+
+diff --git a/net/minecraft/server/level/ServerLevel.java b/net/minecraft/server/level/ServerLevel.java
+index 887f7a168d4a515fc5fafec6398bfe6888949359..821f71cc25f0c7faf384bce606404645003dffb1 100644
+--- a/net/minecraft/server/level/ServerLevel.java
++++ b/net/minecraft/server/level/ServerLevel.java
+@@ -51,7 +51,6 @@ import net.minecraft.network.protocol.game.ClientboundBlockEventPacket;
+ import net.minecraft.network.protocol.game.ClientboundDamageEventPacket;
+ import net.minecraft.network.protocol.game.ClientboundEntityEventPacket;
+ import net.minecraft.network.protocol.game.ClientboundExplodePacket;
+-import net.minecraft.network.protocol.game.ClientboundGameEventPacket;
+ import net.minecraft.network.protocol.game.ClientboundLevelEventPacket;
+ import net.minecraft.network.protocol.game.ClientboundLevelParticlesPacket;
+ import net.minecraft.network.protocol.game.ClientboundSoundEntityPacket;
+@@ -72,7 +71,6 @@ import net.minecraft.util.Mth;
+ import net.minecraft.util.ProgressListener;
+ import net.minecraft.util.RandomSource;
+ import net.minecraft.util.Util;
+-import net.minecraft.util.datafix.DataFixTypes;
+ import net.minecraft.util.debug.DebugSubscriptions;
+ import net.minecraft.util.debug.LevelDebugSynchronizers;
+ import net.minecraft.util.profiling.Profiler;
+@@ -135,19 +133,15 @@ import net.minecraft.world.level.chunk.ChunkGenerator;
+ import net.minecraft.world.level.chunk.LevelChunk;
+ import net.minecraft.world.level.chunk.LevelChunkSection;
+ import net.minecraft.world.level.chunk.status.ChunkStatus;
+-import net.minecraft.world.level.chunk.storage.EntityStorage;
+ import net.minecraft.world.level.chunk.storage.RegionStorageInfo;
+-import net.minecraft.world.level.chunk.storage.SimpleRegionStorage;
+ import net.minecraft.world.level.dimension.BuiltinDimensionTypes;
+ import net.minecraft.world.level.dimension.DimensionType;
+ import net.minecraft.world.level.dimension.LevelStem;
+ import net.minecraft.world.level.dimension.end.EndDragonFight;
+-import net.minecraft.world.level.entity.EntityPersistentStorage;
+ import net.minecraft.world.level.entity.EntityTickList;
+ import net.minecraft.world.level.entity.EntityTypeTest;
+ import net.minecraft.world.level.entity.LevelCallback;
+ import net.minecraft.world.level.entity.LevelEntityGetter;
+-import net.minecraft.world.level.entity.PersistentEntitySectionManager;
+ import net.minecraft.world.level.gameevent.DynamicGameEventListener;
+ import net.minecraft.world.level.gameevent.GameEvent;
+ import net.minecraft.world.level.gameevent.GameEventDispatcher;
+@@ -170,7 +164,6 @@ import net.minecraft.world.level.saveddata.maps.MapItemSavedData;
+ import net.minecraft.world.level.storage.DimensionDataStorage;
+ import net.minecraft.world.level.storage.LevelData;
+ import net.minecraft.world.level.storage.LevelStorageSource;
+-import net.minecraft.world.level.storage.ServerLevelData;
+ import net.minecraft.world.phys.AABB;
+ import net.minecraft.world.phys.Vec3;
+ import net.minecraft.world.phys.shapes.BooleanOp;
+@@ -178,6 +171,7 @@ import net.minecraft.world.phys.shapes.Shapes;
+ import net.minecraft.world.phys.shapes.VoxelShape;
+ import net.minecraft.world.ticks.LevelTicks;
+ import net.minecraft.world.waypoints.WaypointTransmitter;
++import org.dreeam.leaf.config.modules.opt.DisableWorldSimulation;
+ import org.jspecify.annotations.Nullable;
+ import org.slf4j.Logger;
+ 
+@@ -994,10 +988,21 @@ public class ServerLevel extends Level implements ServerEntityGetter, WorldGenLe
+         profilerFiller.push("tickPending");
+         if (!this.isDebug() && runsNormally) {
+             long l = this.getGameTime();
+-            profilerFiller.push("blockTicks");
+-            this.blockTicks.tick(l, paperConfig().environment.maxBlockTicks, this::tickBlock); // Paper - configurable max block ticks
+-            profilerFiller.popPush("fluidTicks");
+-            this.fluidTicks.tick(l, paperConfig().environment.maxFluidTicks, this::tickFluid); // Paper - configurable max fluid ticks
++
++            if (!DisableWorldSimulation.blockTicking) {
++                profilerFiller.push("blockTicks");
++                this.blockTicks.tick(l, paperConfig().environment.maxBlockTicks, this::tickBlock); // Paper - configurable max block ticks
++            } else {
++                profilerFiller.push("blockTicks");
++            }
++
++            if (!DisableWorldSimulation.fluidTicking) {
++                profilerFiller.popPush("fluidTicks");
++                this.fluidTicks.tick(l, paperConfig().environment.maxFluidTicks, this::tickFluid); // Paper - configurable max fluid ticks
++            } else {
++                profilerFiller.popPush("fluidTicks");
++            }
++
+             profilerFiller.pop();
+         }
+ 
+@@ -1009,7 +1014,8 @@ public class ServerLevel extends Level implements ServerEntityGetter, WorldGenLe
+         profilerFiller.popPush("chunkSource");
+         this.getChunkSource().tick(hasTimeLeft, true);
+         profilerFiller.popPush("blockEvents");
+-        if (runsNormally) {
++
++        if (runsNormally && !DisableWorldSimulation.blockEvents) {
+             this.runBlockEvents();
+         }
+ 
+@@ -1221,6 +1227,10 @@ public class ServerLevel extends Level implements ServerEntityGetter, WorldGenLe
+     public final org.dreeam.leaf.world.EntityCollisionCache entityCollisionCache = new org.dreeam.leaf.world.EntityCollisionCache(); // Leaf - cache collision list
+     public final org.dreeam.leaf.util.FastBitRadixSort fastBitRadixSort = new org.dreeam.leaf.util.FastBitRadixSort(); // Leaf - fast bit radix sort
+     public void tickChunk(LevelChunk chunk, int randomTickSpeed) {
++        if (DisableWorldSimulation.chunkTicking) {
++            return;
++        }
++
+         final net.minecraft.world.level.levelgen.BitRandomSource simpleRandom = this.simpleRandom; // Paper - optimise random ticking // Leaf - Faster random generator - upcasting
+         ChunkPos pos = chunk.getPos();
+         int minBlockX = pos.getMinBlockX();
