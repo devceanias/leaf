@@ -1,0 +1,124 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Sun, 26 Apr 2026 16:51:19 +1000
+Subject: [PATCH] optimise combat projectiles
+
+
+diff --git a/net/minecraft/world/entity/projectile/Projectile.java b/net/minecraft/world/entity/projectile/Projectile.java
+index a145dde3da6e5b51402fe5a7c61d9af6884b1385..f1ef94b095c16ef0ba44c34167cf0ab3d15c4f9e 100644
+--- a/net/minecraft/world/entity/projectile/Projectile.java
++++ b/net/minecraft/world/entity/projectile/Projectile.java
+@@ -34,6 +34,7 @@ import net.minecraft.world.phys.BlockHitResult;
+ import net.minecraft.world.phys.EntityHitResult;
+ import net.minecraft.world.phys.HitResult;
+ import net.minecraft.world.phys.Vec3;
++import org.dreeam.leaf.config.modules.opt.CombatProjectileMechanics;
+ import org.jspecify.annotations.Nullable;
+ 
+ public abstract class Projectile extends Entity implements TraceableEntity {
+@@ -180,6 +181,13 @@ public abstract class Projectile extends Entity implements TraceableEntity {
+     }
+ 
+     public Vec3 getMovementToShoot(double x, double y, double z, float velocity, float inaccuracy) {
++        if (CombatProjectileMechanics.optimise &&
++            CombatProjectileMechanics.alwaysAccurateArrows &&
++            this instanceof AbstractArrow
++        ) {
++            inaccuracy = 0.0F;
++        }
++
+         return new Vec3(x, y, z)
+             .normalize()
+             .add(
+diff --git a/net/minecraft/world/entity/projectile/ProjectileUtil.java b/net/minecraft/world/entity/projectile/ProjectileUtil.java
+index 00e7dd53ed4f82001b681f32e1b88495d66669d0..548fb24f78a509b726341a916ba016674cd7430a 100644
+--- a/net/minecraft/world/entity/projectile/ProjectileUtil.java
++++ b/net/minecraft/world/entity/projectile/ProjectileUtil.java
+@@ -10,6 +10,7 @@ import net.minecraft.util.Mth;
+ import net.minecraft.world.InteractionHand;
+ import net.minecraft.world.entity.Entity;
+ import net.minecraft.world.entity.LivingEntity;
++import net.minecraft.world.entity.player.Player;
+ import net.minecraft.world.entity.projectile.arrow.AbstractArrow;
+ import net.minecraft.world.item.ArrowItem;
+ import net.minecraft.world.item.Item;
+@@ -23,6 +24,7 @@ import net.minecraft.world.phys.BlockHitResult;
+ import net.minecraft.world.phys.EntityHitResult;
+ import net.minecraft.world.phys.HitResult;
+ import net.minecraft.world.phys.Vec3;
++import org.dreeam.leaf.config.modules.opt.CombatProjectileMechanics;
+ import org.jspecify.annotations.Nullable;
+ 
+ public final class ProjectileUtil {
+@@ -143,6 +145,13 @@ public final class ProjectileUtil {
+     }
+ 
+     public static float computeMargin(Entity entity) {
++        if (CombatProjectileMechanics.optimise &&
++            CombatProjectileMechanics.disableMarginExpansion &&
++            entity instanceof Projectile
++        ) {
++            return DEFAULT_ENTITY_HIT_RESULT_MARGIN;
++        }
++
+         return Math.max(0.0F, Math.min(0.3F, (entity.tickCount - 2) / 20.0F));
+     }
+ 
+@@ -156,8 +165,19 @@ public final class ProjectileUtil {
+         for (Entity entity1 : level.getEntities(source, boundingBox, filter)) {
+             AABB aabb = entity1.getBoundingBox().inflate(margin);
+             Optional<Vec3> optional1 = aabb.clip(startVec, endVec);
++
++            if (optional1.isEmpty() &&
++                CombatProjectileMechanics.optimise &&
++                CombatProjectileMechanics.useAccurateCollisions &&
++                source instanceof Projectile &&
++                entity1 instanceof Player
++            ) {
++                optional1 = entity1.getBoundingBox().inflate(DEFAULT_ENTITY_HIT_RESULT_MARGIN).clip(startVec, endVec);
++            }
++
+             if (optional1.isPresent()) {
+                 double d1 = startVec.distanceToSqr(optional1.get());
++
+                 if (d1 < d) {
+                     entity = entity1;
+                     d = d1;
+@@ -192,23 +212,37 @@ public final class ProjectileUtil {
+ 
+         for (Entity entity : level.getEntities(source, boundingBox, filter)) {
+             AABB boundingBox1 = entity.getBoundingBox();
++
+             if (includeFromEntity && boundingBox1.contains(startVec)) {
+                 list.add(new EntityHitResult(entity, startVec));
+             } else {
+                 Optional<Vec3> optional = boundingBox1.clip(startVec, endVec);
++
++                if (optional.isEmpty() &&
++                    CombatProjectileMechanics.optimise &&
++                    CombatProjectileMechanics.useAccurateCollisions &&
++                    source instanceof Projectile &&
++                    entity instanceof Player
++                ) {
++                    optional = boundingBox1.inflate(DEFAULT_ENTITY_HIT_RESULT_MARGIN).clip(startVec, endVec);
++                }
++
+                 if (optional.isPresent()) {
+                     list.add(new EntityHitResult(entity, optional.get()));
+                 } else if (!(margin <= 0.0)) {
+                     Optional<Vec3> optional1 = boundingBox1.inflate(margin).clip(startVec, endVec);
++
+                     if (!optional1.isEmpty()) {
+                         Vec3 vec3 = optional1.get();
+                         Vec3 center = boundingBox1.getCenter();
+                         BlockHitResult blockHitResult = level.clipIncludingBorder(new ClipContext(vec3, center, clipType, ClipContext.Fluid.NONE, source));
++
+                         if (blockHitResult.getType() != HitResult.Type.MISS) {
+                             center = blockHitResult.getLocation();
+                         }
+ 
+                         Optional<Vec3> optional2 = entity.getBoundingBox().clip(vec3, center);
++
+                         if (optional2.isPresent()) {
+                             list.add(new EntityHitResult(entity, optional2.get()));
+                         }
