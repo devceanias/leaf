@@ -10,7 +10,7 @@ import java.util.Locale;
 import java.util.Set;
 
 public class ServerSoundTweaks extends ConfigModules {
-    public static boolean shouldPlayCancelledHitSounds = true;
+    public static boolean shouldPlayCancelledHitSounds = false;
     public static boolean skipLethalDamageEventPacket = true;
 
     public static Set<String> suppressed = Set.of();
@@ -24,7 +24,7 @@ public class ServerSoundTweaks extends ConfigModules {
         final String base = getBasePath();
 
         shouldPlayCancelledHitSounds = config.getBoolean(
-            base + ".play-cancelled-hits",
+            base + ".should-play-cancelled-hit-sounds",
             shouldPlayCancelledHitSounds,
             config.pickStringRegionBased(
                 """
