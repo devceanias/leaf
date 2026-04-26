@@ -16,7 +16,7 @@ public class BlockSurvivalChecks extends ConfigModules {
             getBasePath() + ".block-survival-checks",
             enabled,
             config.pickStringRegionBased(
-                "Toggles block survival checks (i.e. if disabled, cactus won't break by nearby blocks).",
+                "Toggles block survival checks (i.e. if disabled, cacti won't break due to blocks nearby).",
                 "禁用方块生存检查（例如仙人掌不会因附近方块而破坏）。"
             )
         );

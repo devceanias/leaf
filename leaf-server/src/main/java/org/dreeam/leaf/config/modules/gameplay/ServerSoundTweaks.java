@@ -11,7 +11,7 @@ import java.util.Set;
 
 public class ServerSoundTweaks extends ConfigModules {
     public static boolean shouldPlayCancelledHitSounds = true;
-    public static boolean skipLethalDamageEventPacket = false;
+    public static boolean skipLethalDamageEventPacket = true;
 
     public static Set<String> suppressed = Set.of();
 
@@ -28,7 +28,7 @@ public class ServerSoundTweaks extends ConfigModules {
             shouldPlayCancelledHitSounds,
             config.pickStringRegionBased(
                 """
-                Allows combat hit sounds like nodamage when the damage event was cancelled.
+                Allows combat hit sounds like nodamage when the damage event is cancelled.
                 """,
                 """
                 当伤害事件被取消时，仍允许播放如 nodamage 等攻击命中音效。
@@ -37,14 +37,14 @@ public class ServerSoundTweaks extends ConfigModules {
         );
 
         skipLethalDamageEventPacket = config.getBoolean(
-            base + ".skip-lethal-player-damage-event-packet",
+            base + ".skip-lethal-damage-event-packet",
             skipLethalDamageEventPacket,
             config.pickStringRegionBased(
                 """
-                Skips the final damage event packet for dying players so the death event fully controls whether the last hurt or death sound can start playing.
+                Skips the final damage event packet for dying players.
                 """,
                 """
-                Skips the final damage event packet for dying players so the death event fully controls whether the last hurt or death sound can start playing.
+                跳过即将死亡玩家的最终伤害事件数据包。
                 """
             )
         );
