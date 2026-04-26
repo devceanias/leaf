@@ -5,7 +5,7 @@ import org.dreeam.leaf.config.EnumConfigCategory;
 
 public class EnderPearlMechanics extends ConfigModules {
     public static boolean retainMomentum = true;
-    public static boolean preventGlitch = false;
+    public static boolean preventGlitch = true;
 
     public String getBasePath() {
         return EnumConfigCategory.GAMEPLAY.getBaseKeyName() + ".pearls";

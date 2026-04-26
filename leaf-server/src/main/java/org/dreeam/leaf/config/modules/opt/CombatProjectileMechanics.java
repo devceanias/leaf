@@ -11,7 +11,7 @@ public class CombatProjectileMechanics extends ConfigModules {
     public static boolean disableMarginExpansion = true;
 
     public String getBasePath() {
-        return EnumConfigCategory.PERF.getBaseKeyName() + ".projectiles";
+        return EnumConfigCategory.GAMEPLAY.getBaseKeyName() + ".projectiles";
     }
 
     @Override

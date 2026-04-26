@@ -4,7 +4,7 @@ import org.dreeam.leaf.config.ConfigModules;
 import org.dreeam.leaf.config.EnumConfigCategory;
 
 public class ItemMergeAttempts extends ConfigModules {
-    public static int maxPerTick = -1;
+    public static int maxPerTick = 150;
 
     public String getBasePath() {
         return EnumConfigCategory.PERF.getBaseKeyName();
