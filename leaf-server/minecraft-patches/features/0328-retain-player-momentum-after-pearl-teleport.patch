@@ -5,23 +5,15 @@ Subject: [PATCH] retain player momentum after pearl teleport
 
 
 diff --git a/net/minecraft/world/entity/projectile/throwableitemprojectile/ThrownEnderpearl.java b/net/minecraft/world/entity/projectile/throwableitemprojectile/ThrownEnderpearl.java
-index 2ddc327ceef14d9c8ec3263aacbd08439d135cd2..864e653ec3a4d7ca312c45d776fd28ac66f1512a 100644
+index 41a30a36e3905b19f5e9a52a94d6a3ec38ed3968..334bdbc3ef99a8a01fcf20573a8608c5b2f8e697 100644
 --- a/net/minecraft/world/entity/projectile/throwableitemprojectile/ThrownEnderpearl.java
 +++ b/net/minecraft/world/entity/projectile/throwableitemprojectile/ThrownEnderpearl.java
-@@ -30,6 +30,7 @@ import net.minecraft.world.phys.EntityHitResult;
- import net.minecraft.world.phys.HitResult;
- import net.minecraft.world.phys.Vec3;
- import org.dreeam.leaf.config.modules.opt.PreventPearlGlitch;
-+import org.dreeam.leaf.config.modules.opt.RetainPearlMomentum;
- import org.jspecify.annotations.Nullable;
- 
- public class ThrownEnderpearl extends ThrowableItemProjectile {
-@@ -123,7 +124,8 @@ public class ThrownEnderpearl extends ThrowableItemProjectile {
+@@ -123,7 +123,8 @@ public class ThrownEnderpearl extends ThrowableItemProjectile {
                          // Store pre teleportation position as the teleport has been moved up.
                          final double preTeleportX = serverPlayer.getX(), preTeleportY = serverPlayer.getY(), preTeleportZ = serverPlayer.getZ();
                          final float preTeleportYRot = serverPlayer.getYRot(), preTeleportXRot = serverPlayer.getXRot();
 -                        ServerPlayer serverPlayer1 = taskServerPlayer.teleport(new TeleportTransition(serverLevel, target, Vec3.ZERO, 0.0F, 0.0F, Relative.union(Relative.ROTATION, Relative.DELTA), TeleportTransition.DO_NOTHING, org.bukkit.event.player.PlayerTeleportEvent.TeleportCause.ENDER_PEARL));
-+                        final Vec3 velocity = RetainPearlMomentum.enabled ? taskServerPlayer.getDeltaMovement() : Vec3.ZERO;
++                        final Vec3 velocity = EnderPearlMechanics.retainMomentum ? taskServerPlayer.getDeltaMovement() : Vec3.ZERO;
 +                        ServerPlayer serverPlayer1 = taskServerPlayer.teleport(new TeleportTransition(serverLevel, target, velocity, 0.0F, 0.0F, Relative.union(Relative.ROTATION, Relative.DELTA), TeleportTransition.DO_NOTHING, org.bukkit.event.player.PlayerTeleportEvent.TeleportCause.ENDER_PEARL));
                          if (serverPlayer1 == null) {
                              this.discard(org.bukkit.event.entity.EntityRemoveEvent.Cause.HIT);
