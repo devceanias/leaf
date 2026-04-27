@@ -5,10 +5,10 @@ Subject: [PATCH] merge pearl mechanics
 
 
 diff --git a/net/minecraft/world/entity/projectile/throwableitemprojectile/ThrownEnderpearl.java b/net/minecraft/world/entity/projectile/throwableitemprojectile/ThrownEnderpearl.java
-index 5c42745c2ca315c4070796b345609aafaae6f072..94770ebe847b12d3fec6e5ac5c6a8679a4c43cb0 100644
+index 864e653ec3a4d7ca312c45d776fd28ac66f1512a..334bdbc3ef99a8a01fcf20573a8608c5b2f8e697 100644
 --- a/net/minecraft/world/entity/projectile/throwableitemprojectile/ThrownEnderpearl.java
 +++ b/net/minecraft/world/entity/projectile/throwableitemprojectile/ThrownEnderpearl.java
-@@ -28,8 +28,7 @@ import net.minecraft.world.phys.AABB;
+@@ -29,8 +29,7 @@ import net.minecraft.world.phys.AABB;
  import net.minecraft.world.phys.EntityHitResult;
  import net.minecraft.world.phys.HitResult;
  import net.minecraft.world.phys.Vec3;
@@ -18,7 +18,7 @@ index 5c42745c2ca315c4070796b345609aafaae6f072..94770ebe847b12d3fec6e5ac5c6a8679
  import org.jspecify.annotations.Nullable;
  
  public class ThrownEnderpearl extends ThrowableItemProjectile {
-@@ -109,7 +108,7 @@ public class ThrownEnderpearl extends ThrowableItemProjectile {
+@@ -110,7 +109,7 @@ public class ThrownEnderpearl extends ThrowableItemProjectile {
  
                  if (owner instanceof ServerPlayer serverPlayer) {
                      if (serverPlayer.connection.isAcceptingMessages()) {
@@ -27,7 +27,7 @@ index 5c42745c2ca315c4070796b345609aafaae6f072..94770ebe847b12d3fec6e5ac5c6a8679
  
                          if (target == null) {
                              discard(EntityRemoveEvent.Cause.HIT);
-@@ -123,7 +122,7 @@ public class ThrownEnderpearl extends ThrowableItemProjectile {
+@@ -124,7 +123,7 @@ public class ThrownEnderpearl extends ThrowableItemProjectile {
                          // Store pre teleportation position as the teleport has been moved up.
                          final double preTeleportX = serverPlayer.getX(), preTeleportY = serverPlayer.getY(), preTeleportZ = serverPlayer.getZ();
                          final float preTeleportYRot = serverPlayer.getYRot(), preTeleportXRot = serverPlayer.getXRot();

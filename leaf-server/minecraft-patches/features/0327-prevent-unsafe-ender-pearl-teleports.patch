@@ -5,7 +5,7 @@ Subject: [PATCH] prevent unsafe ender pearl teleports
 
 
 diff --git a/net/minecraft/world/entity/projectile/throwableitemprojectile/ThrownEnderpearl.java b/net/minecraft/world/entity/projectile/throwableitemprojectile/ThrownEnderpearl.java
-index 2fe748ab39602b1f3d2c4f9982375e582806828c..affa8a465dd0ba5e7a2d8852b78efd02c2820a9e 100644
+index 2fe748ab39602b1f3d2c4f9982375e582806828c..2ddc327ceef14d9c8ec3263aacbd08439d135cd2 100644
 --- a/net/minecraft/world/entity/projectile/throwableitemprojectile/ThrownEnderpearl.java
 +++ b/net/minecraft/world/entity/projectile/throwableitemprojectile/ThrownEnderpearl.java
 @@ -1,6 +1,7 @@
@@ -16,7 +16,15 @@ index 2fe748ab39602b1f3d2c4f9982375e582806828c..affa8a465dd0ba5e7a2d8852b78efd02
  import net.minecraft.core.BlockPos;
  import net.minecraft.core.SectionPos;
  import net.minecraft.core.particles.ParticleTypes;
-@@ -23,9 +24,11 @@ import net.minecraft.world.level.block.Blocks;
+@@ -8,6 +9,7 @@ import net.minecraft.server.level.ServerLevel;
+ import net.minecraft.server.level.ServerPlayer;
+ import net.minecraft.sounds.SoundEvents;
+ import net.minecraft.sounds.SoundSource;
++import net.minecraft.util.Mth;
+ import net.minecraft.world.entity.Entity;
+ import net.minecraft.world.entity.EntityReference;
+ import net.minecraft.world.entity.EntitySpawnReason;
+@@ -23,9 +25,11 @@ import net.minecraft.world.level.block.Blocks;
  import net.minecraft.world.level.block.state.BlockState;
  import net.minecraft.world.level.gamerules.GameRules;
  import net.minecraft.world.level.portal.TeleportTransition;
@@ -28,7 +36,7 @@ index 2fe748ab39602b1f3d2c4f9982375e582806828c..affa8a465dd0ba5e7a2d8852b78efd02
  import org.jspecify.annotations.Nullable;
  
  public class ThrownEnderpearl extends ThrowableItemProjectile {
-@@ -101,16 +104,25 @@ public class ThrownEnderpearl extends ThrowableItemProjectile {
+@@ -101,16 +105,25 @@ public class ThrownEnderpearl extends ThrowableItemProjectile {
          if (this.level() instanceof ServerLevel serverLevel && !this.isRemoved()) {
              Entity owner = this.getOwner();
              if (owner != null && isAllowedToTeleportOwner(owner, serverLevel)) {
@@ -56,7 +64,7 @@ index 2fe748ab39602b1f3d2c4f9982375e582806828c..affa8a465dd0ba5e7a2d8852b78efd02
                          if (serverPlayer1 == null) {
                              this.discard(org.bukkit.event.entity.EntityRemoveEvent.Cause.HIT);
                              return;
-@@ -142,7 +154,7 @@ public class ThrownEnderpearl extends ThrowableItemProjectile {
+@@ -142,7 +155,7 @@ public class ThrownEnderpearl extends ThrowableItemProjectile {
                              serverPlayer1.hurtServer(taskServerPlayer.level(), this.damageSources().enderPearl().eventEntityDamager(this), this.level().purpurConfig.enderPearlDamage); // CraftBukkit // Paper - fix DamageSource API // Purpur - Configurable Ender Pearl damage
                          }
  
@@ -65,7 +73,7 @@ index 2fe748ab39602b1f3d2c4f9982375e582806828c..affa8a465dd0ba5e7a2d8852b78efd02
                          };
                          if (org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled) {
                              serverPlayer.getBukkitEntity().taskScheduler.schedule(teleportPlayerCrossDimensionTask, entity -> {
-@@ -154,13 +166,15 @@ public class ThrownEnderpearl extends ThrowableItemProjectile {
+@@ -154,13 +167,15 @@ public class ThrownEnderpearl extends ThrowableItemProjectile {
                      }
                  } else {
                      Entity entity = owner.teleport(
@@ -83,16 +91,18 @@ index 2fe748ab39602b1f3d2c4f9982375e582806828c..affa8a465dd0ba5e7a2d8852b78efd02
                  }
  
                  this.discard(org.bukkit.event.entity.EntityRemoveEvent.Cause.HIT); // CraftBukkit - add Bukkit remove cause
-@@ -178,6 +192,48 @@ public class ThrownEnderpearl extends ThrowableItemProjectile {
+@@ -178,6 +193,81 @@ public class ThrownEnderpearl extends ThrowableItemProjectile {
          }
      }
  
-+    private @Nullable Vec3 findPearlTarget(final ServerPlayer player, final ServerLevel level, final Vec3 position) {
-+        final BlockPos containing = BlockPos.containing(position);
++    private @Nullable Vec3 findPearlTarget(final ServerPlayer player, final ServerLevel level, final Vec3 hit) {
++        final BlockPos pos = BlockPos.containing(hit);
 +
-+        Vec3 target = new Vec3(containing.getX() + 0.5D, containing.getY(), containing.getZ() + 0.5D);
++        Vec3 target = hit;
 +
-+        if (level.getBlockState(containing).is(Blocks.BARRIER) || level.getBlockState(containing.above()).is(Blocks.BARRIER)) {
++        if (level.getBlockState(pos).is(Blocks.BARRIER) ||
++            level.getBlockState(pos.above()).is(Blocks.BARRIER)
++        ) {
 +            target = findBarrierSafe(level, target);
 +
 +            if (target == null) {
@@ -100,7 +110,15 @@ index 2fe748ab39602b1f3d2c4f9982375e582806828c..affa8a465dd0ba5e7a2d8852b78efd02
 +            }
 +        }
 +
-+        return isTargetSafe(player, level, target) ? target : null;
++        final BlockPos result = BlockPos.containing(target);
++
++        final Vec3 snapped = new Vec3(
++            result.getX() + 0.5D,
++            result.getY(),
++            result.getZ() + 0.5D
++        );
++
++        return isTargetSafe(player, level, snapped) ? snapped : null;
 +    }
 +
 +    private @Nullable Vec3 findBarrierSafe(final ServerLevel level, final Vec3 position) {
@@ -110,10 +128,10 @@ index 2fe748ab39602b1f3d2c4f9982375e582806828c..affa8a465dd0ba5e7a2d8852b78efd02
 +        final int z = containing.getZ();
 +
 +        for (int y = containing.getY(); y >= level.getMinY(); y--) {
-+            final BlockPos floorPosition = new BlockPos(x, y, z);
-+            final BlockState floorState = level.getBlockState(floorPosition);
++            final BlockPos floorPos = new BlockPos(x, y, z);
++            final BlockState floorState = level.getBlockState(floorPos);
 +
-+            if (floorState.getCollisionShape(level, floorPosition).isEmpty() || floorState.is(Blocks.BARRIER)) {
++            if (floorState.getCollisionShape(level, floorPos).isEmpty() || floorState.is(Blocks.BARRIER)) {
 +                continue;
 +            }
 +
@@ -124,9 +142,32 @@ index 2fe748ab39602b1f3d2c4f9982375e582806828c..affa8a465dd0ba5e7a2d8852b78efd02
 +    }
 +
 +    private boolean isTargetSafe(final ServerPlayer player, final ServerLevel level, final Vec3 position) {
-+        final AABB box = player.getDimensions(player.getPose()).makeBoundingBox(position).deflate(1.0E-7);
++        final AABB boundingBox = player.getDimensions(player.getPose()).makeBoundingBox(position);
 +
-+        return level.noCollision(player, box);
++        final int minX = Mth.floor(boundingBox.minX);
++        final int maxX = Mth.floor(boundingBox.maxX);
++        final int minY = Mth.floor(boundingBox.minY);
++        final int maxY = Mth.floor(boundingBox.maxY);
++        final int minZ = Mth.floor(boundingBox.minZ);
++        final int maxZ = Mth.floor(boundingBox.maxZ);
++
++        for (int x = minX; x <= maxX; x++) {
++            for (int y = minY; y <= maxY; y++) {
++                for (int z = minZ; z <= maxZ; z++) {
++                    final BlockPos pos = new BlockPos(x, y, z);
++
++                    for (final AABB shape : level.getBlockState(pos).getCollisionShape(level, pos).toAabbs()) {
++                        if (!shape.move(pos).intersects(boundingBox)) {
++                            continue;
++                        }
++
++                        return false;
++                    }
++                }
++            }
++        }
++
++        return true;
 +    }
 +
      @Override
