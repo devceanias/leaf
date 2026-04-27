@@ -1,0 +1,107 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Mon, 27 Apr 2026 23:00:45 +1000
+Subject: [PATCH] disable server debug
+
+
+diff --git a/net/minecraft/server/level/ServerPlayer.java b/net/minecraft/server/level/ServerPlayer.java
+index a2f8370103f2a2103ef35f406eaeac7ea22769ef..0be767ce034a026cca32499468acf75802096069 100644
+--- a/net/minecraft/server/level/ServerPlayer.java
++++ b/net/minecraft/server/level/ServerPlayer.java
+@@ -198,6 +198,7 @@ import net.minecraft.world.scores.ScoreHolder;
+ import net.minecraft.world.scores.Scoreboard;
+ import net.minecraft.world.scores.Team;
+ import net.minecraft.world.scores.criteria.ObjectiveCriteria;
++import org.dreeam.leaf.config.modules.misc.DisableServerDebug;
+ import org.jspecify.annotations.Nullable;
+ import org.slf4j.Logger;
+ 
+@@ -3145,6 +3146,10 @@ public class ServerPlayer extends Player implements ca.spottedleaf.moonrise.patc
+     }
+ 
+     public Set<DebugSubscription<?>> debugSubscriptions() {
++        if (DisableServerDebug.enabled) {
++            return Set.of();
++        }
++
+         return !this.server.debugSubscribers().hasRequiredPermissions(this) ? Set.of() : this.requestedDebugSubscriptions;
+     }
+ 
+diff --git a/net/minecraft/server/network/ServerGamePacketListenerImpl.java b/net/minecraft/server/network/ServerGamePacketListenerImpl.java
+index 82ba03076d95e825be70cafc7aac2ffcb75a7f76..bb8e5446a744176f90f285b5a563aed74ecc16a5 100644
+--- a/net/minecraft/server/network/ServerGamePacketListenerImpl.java
++++ b/net/minecraft/server/network/ServerGamePacketListenerImpl.java
+@@ -212,6 +212,7 @@ import net.minecraft.world.phys.shapes.BooleanOp;
+ import net.minecraft.world.phys.shapes.Shapes;
+ import net.minecraft.world.phys.shapes.VoxelShape;
+ import org.dreeam.leaf.config.modules.fixes.FixRightClickOffhandCooldown;
++import org.dreeam.leaf.config.modules.misc.DisableServerDebug;
+ import org.dreeam.leaf.config.modules.network.ChatMessageSignature;
+ import org.dreeam.leaf.config.modules.network.DisableChatKick;
+ import org.jspecify.annotations.Nullable;
+@@ -3807,6 +3808,11 @@ public class ServerGamePacketListenerImpl
+     @Override
+     public void handleDebugSubscriptionRequest(ServerboundDebugSubscriptionRequestPacket packet) {
+         PacketUtils.ensureRunningOnSameThread(packet, this, this.player.level());
++
++        if (DisableServerDebug.enabled) {
++            return;
++        }
++
+         this.player.requestDebugSubscriptions(packet.subscriptions());
+     }
+ 
+diff --git a/net/minecraft/util/debug/ServerDebugSubscribers.java b/net/minecraft/util/debug/ServerDebugSubscribers.java
+index a700521a74b7e8b0c3000df18dce85592f01e568..7d1eaf6f0733b3d4110547b6319da4a48997ddca 100644
+--- a/net/minecraft/util/debug/ServerDebugSubscribers.java
++++ b/net/minecraft/util/debug/ServerDebugSubscribers.java
+@@ -10,6 +10,7 @@ import net.minecraft.network.protocol.Packet;
+ import net.minecraft.server.MinecraftServer;
+ import net.minecraft.server.level.ServerPlayer;
+ import net.minecraft.server.players.NameAndId;
++import org.dreeam.leaf.config.modules.misc.DisableServerDebug;
+ 
+ public class ServerDebugSubscribers {
+     private final MinecraftServer server;
+@@ -24,6 +25,12 @@ public class ServerDebugSubscribers {
+     }
+ 
+     public void tick() {
++        if (DisableServerDebug.enabled) {
++            enabledSubscriptions.clear();
++
++            return;
++        }
++
+         this.enabledSubscriptions.values().forEach(List::clear);
+ 
+         for (ServerPlayer serverPlayer : this.server.getPlayerList().getPlayers()) {
+@@ -36,16 +43,28 @@ public class ServerDebugSubscribers {
+     }
+ 
+     public void broadcastToAll(DebugSubscription<?> subscription, Packet<?> packet) {
++        if (org.dreeam.leaf.config.modules.misc.DisableServerDebug.enabled) {
++            return;
++        }
++
+         for (ServerPlayer serverPlayer : this.getSubscribersFor(subscription)) {
+             serverPlayer.connection.send(packet);
+         }
+     }
+ 
+     public Set<DebugSubscription<?>> enabledSubscriptions() {
++        if (org.dreeam.leaf.config.modules.misc.DisableServerDebug.enabled) {
++            return Set.of();
++        }
++
+         return Set.copyOf(this.enabledSubscriptions.keySet());
+     }
+ 
+     public boolean hasAnySubscriberFor(DebugSubscription<?> subscription) {
++        if (org.dreeam.leaf.config.modules.misc.DisableServerDebug.enabled) {
++            return false;
++        }
++
+         return !this.getSubscribersFor(subscription).isEmpty();
+     }
+ 

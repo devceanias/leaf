@@ -1,11 +1,11 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: plantball <mythicalplanetdude@gmail.com>
-Date: Mon, 27 Apr 2026 22:10:19 +1000
+Date: Mon, 27 Apr 2026 23:00:35 +1000
 Subject: [PATCH] add mob spawn ticking toggle
 
 
 diff --git a/net/minecraft/server/level/ServerChunkCache.java b/net/minecraft/server/level/ServerChunkCache.java
-index 7cacbc7814d47beaabf4a5bab33d7e75dea51bbd..8fbef58d49701b3146738dbace66a8f38ad22b88 100644
+index 7cacbc7814d47beaabf4a5bab33d7e75dea51bbd..c8d72d1759c403abb27981a7d79d3681d77b09c0 100644
 --- a/net/minecraft/server/level/ServerChunkCache.java
 +++ b/net/minecraft/server/level/ServerChunkCache.java
 @@ -10,7 +10,6 @@ import java.io.IOException;
@@ -17,21 +17,21 @@ index 7cacbc7814d47beaabf4a5bab33d7e75dea51bbd..8fbef58d49701b3146738dbace66a8f3
  import java.util.concurrent.CompletableFuture;
  import java.util.concurrent.CompletionStage;
 @@ -540,7 +539,9 @@ public class ServerChunkCache extends ChunkSource implements ca.spottedleaf.moon
-
+ 
          // Pufferfish start - optimize mob spawning
          // Leaf start - optimize mob spawning
 -        if (org.dreeam.leaf.config.modules.async.AsyncMobSpawning.enabled && this.level.tickRateManager().runsNormally()) {
 +        if (org.dreeam.leaf.config.modules.async.AsyncMobSpawning.enabled
 +            && this.level.tickRateManager().runsNormally()
-+            && !level.galeConfig().smallOptimizations.disableMobSpawnTicking) {
++            && !this.level.galeConfig().smallOptimizations.disableMobSpawnTicking) {
              // updatePerPlayerMobCount();
              // Leaf end - optimize mob spawning
              if (firstRunSpawnCounts) {
 @@ -599,83 +600,98 @@ public class ServerChunkCache extends ChunkSource implements ca.spottedleaf.moon
      }
-
+ 
      private void tickChunks(ProfilerFiller profiler, long timeInhabited) {
-+        final boolean disableSpawnTicking = level.galeConfig().smallOptimizations.disableMobSpawnTicking;
++        final boolean disableSpawnTicking = this.level.galeConfig().smallOptimizations.disableMobSpawnTicking;
 +
          profiler.push("naturalSpawnCount");
 -        int naturalSpawnChunkCount = this.distanceManager.getNaturalSpawnChunkCount();
@@ -107,9 +107,9 @@ index 7cacbc7814d47beaabf4a5bab33d7e75dea51bbd..8fbef58d49701b3146738dbace66a8f3
 +                filteredSpawningCategories = List.of();
 +            }
          }
-
+ 
          List<LevelChunk> list = this.spawningChunks;
-
+ 
 -        try {
 -            profiler.popPush("filteringSpawningChunks");
 -            this.level.natureSpawnChunkMap.build(this.level.moonrise$getPlayerTickingChunks(), list); // Leaf - optimize mob spawning
@@ -190,3 +190,4 @@ index 7cacbc7814d47beaabf4a5bab33d7e75dea51bbd..8fbef58d49701b3146738dbace66a8f3
 +
              list.clear();
          }
+ 
