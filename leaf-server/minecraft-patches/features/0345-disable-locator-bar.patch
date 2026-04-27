@@ -1,0 +1,242 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Mon, 27 Apr 2026 23:40:13 +1000
+Subject: [PATCH] disable locator bar
+
+
+diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/MinecraftServer.java
+index 44b5328b020e451ac27c1fd880a4165a44cce904..593f69432720f3037cd5de4e01ccf07952019819 100644
+--- a/net/minecraft/server/MinecraftServer.java
++++ b/net/minecraft/server/MinecraftServer.java
+@@ -3068,7 +3068,9 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+         } else if (rule == GameRules.LOCATOR_BAR) {
+             // this.getAllLevels().forEach(serverLevel -> { // Paper - per-world game rules
+                 ServerWaypointManager waypointManager = serverLevel.getWaypointManager();
+-                if ((Boolean)value) {
++                if (serverLevel.galeConfig().smallOptimizations.disableLocatorBar) {
++                    waypointManager.breakAllConnections();
++                } else if ((Boolean)value) {
+                     serverLevel.players().forEach(waypointManager::updatePlayer);
+                 } else {
+                     waypointManager.breakAllConnections();
+diff --git a/net/minecraft/server/level/ServerChunkCache.java b/net/minecraft/server/level/ServerChunkCache.java
+index c8d72d1759c403abb27981a7d79d3681d77b09c0..35e930089554945e115d4d7392e5a2e308c6fcfe 100644
+--- a/net/minecraft/server/level/ServerChunkCache.java
++++ b/net/minecraft/server/level/ServerChunkCache.java
+@@ -819,8 +819,8 @@ public class ServerChunkCache extends ChunkSource implements ca.spottedleaf.moon
+     public void move(ServerPlayer player) {
+         if (!player.isRemoved()) {
+             this.chunkMap.move(player);
+-            if (player.isReceivingWaypoints()) {
+-                this.level.getWaypointManager().updatePlayer(player);
++            if (!level.galeConfig().smallOptimizations.disableLocatorBar && player.isReceivingWaypoints()) {
++                level.getWaypointManager().updatePlayer(player);
+             }
+         }
+     }
+diff --git a/net/minecraft/server/level/ServerLevel.java b/net/minecraft/server/level/ServerLevel.java
+index ad3714c0c27f7db0a5248ce3a445e50f68e700d9..464eb029cbcc5c6cd68fb293203a171871e24d53 100644
+--- a/net/minecraft/server/level/ServerLevel.java
++++ b/net/minecraft/server/level/ServerLevel.java
+@@ -3137,7 +3137,10 @@ public class ServerLevel extends Level implements ServerEntityGetter, WorldGenLe
+     final class EntityCallbacks implements LevelCallback<Entity> {
+         @Override
+         public void onCreated(Entity entity) {
+-            if (entity instanceof WaypointTransmitter waypointTransmitter && waypointTransmitter.isTransmittingWaypoint()) {
++            if (!ServerLevel.this.galeConfig().smallOptimizations.disableLocatorBar &&
++                entity instanceof WaypointTransmitter waypointTransmitter &&
++                waypointTransmitter.isTransmittingWaypoint()
++            ) {
+                 ServerLevel.this.getWaypointManager().trackWaypoint(waypointTransmitter);
+             }
+             entity.setOldPosAndRot(); // Paper - update old pos / rot for new entities as it will default to Vec3.ZERO
+@@ -3174,20 +3177,24 @@ public class ServerLevel extends Level implements ServerEntityGetter, WorldGenLe
+             // ServerLevel.this.getChunkSource().addEntity(entity); // Paper - ignore and warn about illegal addEntity calls instead of crashing server; moved down below valid=true
+             if (entity instanceof ServerPlayer serverPlayer) {
+                 ServerLevel.this.players.add(serverPlayer);
+-                if (serverPlayer.isReceivingWaypoints()) {
++                if (!ServerLevel.this.galeConfig().smallOptimizations.disableLocatorBar && serverPlayer.isReceivingWaypoints()) {
+                     ServerLevel.this.getWaypointManager().addPlayer(serverPlayer);
+                 }
+ 
+                 ServerLevel.this.updateSleepingPlayerList();
+             }
+ 
+-            if (entity instanceof WaypointTransmitter waypointTransmitter && waypointTransmitter.isTransmittingWaypoint()) {
++            if (!ServerLevel.this.galeConfig().smallOptimizations.disableLocatorBar &&
++                entity instanceof WaypointTransmitter waypointTransmitter &&
++                waypointTransmitter.isTransmittingWaypoint()
++            ) {
+                 ServerLevel.this.getWaypointManager().trackWaypoint(waypointTransmitter);
+             }
+ 
+             if (entity instanceof Mob mob) {
+                 if (false && ServerLevel.this.isUpdatingNavigations) { // Paper - Remove unnecessary onTrackingStart during navigation warning
+                     String string = "onTrackingStart called during navigation iteration";
++
+                     Util.logAndPauseIfInIde(
+                         "onTrackingStart called during navigation iteration", new IllegalStateException("onTrackingStart called during navigation iteration")
+                     );
+@@ -3203,8 +3210,10 @@ public class ServerLevel extends Level implements ServerEntityGetter, WorldGenLe
+             }
+ 
+             entity.updateDynamicGameEventListener(DynamicGameEventListener::add);
++
+             entity.inWorld = true; // CraftBukkit - Mark entity as in world
+             entity.valid = true; // CraftBukkit
++
+             ServerLevel.this.getChunkSource().addEntity(entity); // Paper - ignore and warn about illegal addEntity calls instead of crashing server
+             // Paper start - Entity origin API
+             if (entity.origin == null) {
+diff --git a/net/minecraft/server/level/ServerPlayer.java b/net/minecraft/server/level/ServerPlayer.java
+index 0be767ce034a026cca32499468acf75802096069..27754ae4263ecc87552230f258202f1087696bcb 100644
+--- a/net/minecraft/server/level/ServerPlayer.java
++++ b/net/minecraft/server/level/ServerPlayer.java
+@@ -1469,6 +1469,10 @@ public class ServerPlayer extends Player implements ca.spottedleaf.moonrise.patc
+     @Override
+     protected void onAttributeUpdated(Holder<Attribute> attribute) {
+         if (attribute.is(Attributes.WAYPOINT_RECEIVE_RANGE)) {
++            if (level().galeConfig().smallOptimizations.disableLocatorBar) {
++                return;
++            }
++
+             ServerWaypointManager waypointManager = this.level().getWaypointManager();
+             if (this.getAttributes().getValue(attribute) > 0.0) {
+                 waypointManager.addPlayer(this);
+diff --git a/net/minecraft/server/waypoints/ServerWaypointManager.java b/net/minecraft/server/waypoints/ServerWaypointManager.java
+index 56dd9ff0bd35a7d20ef0aa8b465708029b01bea9..a345d2fdfd7527c53d32e7dab33b9cd1dde174c1 100644
+--- a/net/minecraft/server/waypoints/ServerWaypointManager.java
++++ b/net/minecraft/server/waypoints/ServerWaypointManager.java
+@@ -27,9 +27,18 @@ public class ServerWaypointManager implements WaypointManager<WaypointTransmitte
+     }
+     // Leaf end - SparklyPaper - parallel world ticking
+ 
++    private boolean isDisabled() {
++        return level.galeConfig().smallOptimizations.disableLocatorBar;
++    }
++
+     @Override
+     public void trackWaypoint(WaypointTransmitter waypoint) {
+         if (org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled) ca.spottedleaf.moonrise.common.util.TickThread.ensureTickThread(this.level, "Cannot track waypoints off-main"); // Leaf - SparklyPaper - parallel world ticking
++
++        if (isDisabled()) {
++            return;
++        }
++
+         this.waypoints.add(waypoint);
+ 
+         for (ServerPlayer serverPlayer : this.players) {
+@@ -40,6 +49,11 @@ public class ServerWaypointManager implements WaypointManager<WaypointTransmitte
+     @Override
+     public void updateWaypoint(WaypointTransmitter waypoint) {
+         if (org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled) ca.spottedleaf.moonrise.common.util.TickThread.ensureTickThread(this.level, "Cannot update waypoints off-main"); // Leaf - SparklyPaper - parallel world ticking
++
++        if (isDisabled()) {
++            return;
++        }
++
+         if (this.waypoints.contains(waypoint)) {
+             Map<ServerPlayer, WaypointTransmitter.Connection> map = Tables.transpose(this.connections).row(waypoint);
+             SetView<ServerPlayer> set = Sets.difference(this.players, map.keySet());
+@@ -64,6 +78,11 @@ public class ServerWaypointManager implements WaypointManager<WaypointTransmitte
+ 
+     public void addPlayer(ServerPlayer player) {
+         if (org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled) ca.spottedleaf.moonrise.common.util.TickThread.ensureTickThread(this.level, "Cannot add player to waypoints off-main"); // Leaf - SparklyPaper - parallel world ticking
++
++        if (isDisabled()) {
++            return;
++        }
++
+         this.players.add(player);
+ 
+         for (WaypointTransmitter waypointTransmitter : this.waypoints) {
+@@ -77,6 +96,11 @@ public class ServerWaypointManager implements WaypointManager<WaypointTransmitte
+ 
+     public void updatePlayer(ServerPlayer player) {
+         if (org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled) ca.spottedleaf.moonrise.common.util.TickThread.ensureTickThread(this.level, "Cannot update player for waypoints off-main"); // Leaf - SparklyPaper - parallel world ticking
++
++        if (isDisabled()) {
++            return;
++        }
++
+         Map<WaypointTransmitter, WaypointTransmitter.Connection> map = this.connections.row(player);
+         SetView<WaypointTransmitter> set = Sets.difference(this.waypoints, map.keySet());
+ 
+@@ -107,20 +131,33 @@ public class ServerWaypointManager implements WaypointManager<WaypointTransmitte
+ 
+     public void remakeConnections(WaypointTransmitter waypoint) {
+         if (org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled) { ca.spottedleaf.moonrise.common.util.TickThread.ensureTickThread(this.level, "Cannot remake waypoint connections off-main"); } // Leaf - SparklyPaper - parallel world ticking
++
++        if (isDisabled()) {
++            return;
++        }
++
+         for (ServerPlayer serverPlayer : this.players) {
+             this.createConnection(serverPlayer, waypoint);
+         }
+     }
+ 
+     public Set<WaypointTransmitter> transmitters() {
++        if (isDisabled()) {
++            return Set.of();
++        }
++
+         return this.waypoints;
+     }
+ 
+     private static boolean isLocatorBarEnabledFor(ServerPlayer player) {
+-        return player.level().getGameRules().get(GameRules.LOCATOR_BAR);
++        return !player.level().galeConfig().smallOptimizations.disableLocatorBar && player.level().getGameRules().get(GameRules.LOCATOR_BAR);
+     }
+ 
+     private void createConnection(ServerPlayer player, WaypointTransmitter waypoint) {
++        if (isDisabled()) {
++            return;
++        }
++
+         if (player != waypoint) {
+             if (isLocatorBarEnabledFor(player)) {
+                 waypoint.makeWaypointConnectionWith(player).ifPresentOrElse(connection -> {
+@@ -137,6 +174,10 @@ public class ServerWaypointManager implements WaypointManager<WaypointTransmitte
+     }
+ 
+     private void updateConnection(ServerPlayer player, WaypointTransmitter waypoint, WaypointTransmitter.Connection connection) {
++        if (isDisabled()) {
++            return;
++        }
++
+         if (player != waypoint) {
+             if (isLocatorBarEnabledFor(player)) {
+                 if (!connection.isBroken()) {
+diff --git a/net/minecraft/world/entity/Entity.java b/net/minecraft/world/entity/Entity.java
+index a3c87b6df5a046c64b548652730d46684a5f1a02..c52e99bf9b88f3761d0f319343476e2779e269ae 100644
+--- a/net/minecraft/world/entity/Entity.java
++++ b/net/minecraft/world/entity/Entity.java
+@@ -5340,7 +5340,11 @@ public abstract class Entity implements SyncedDataHolder, DebugValueSource, Name
+             }
+ 
+             this.levelCallback.onMove();
+-            if ((!org.dreeam.leaf.config.modules.opt.OptimizeWaypoint.enabled || blockUpdated || tickCount % 3 == 0) && !this.firstTick && this.level instanceof ServerLevel serverLevel && !this.isRemoved()) { // Leaf - optimize waypoint
++            if ((!org.dreeam.leaf.config.modules.opt.OptimizeWaypoint.enabled || blockUpdated || tickCount % 3 == 0)
++                && !this.firstTick
++                && this.level instanceof ServerLevel serverLevel
++                && !serverLevel.galeConfig().smallOptimizations.disableLocatorBar
++                && !this.isRemoved()) { // Leaf - optimize waypoint
+                 if (this instanceof WaypointTransmitter waypointTransmitter && waypointTransmitter.isTransmittingWaypoint()) {
+                     serverLevel.getWaypointManager().updateWaypoint(waypointTransmitter);
+                 }
+diff --git a/net/minecraft/world/entity/LivingEntity.java b/net/minecraft/world/entity/LivingEntity.java
+index 587a88ff690bf5e069310a820c5a99cca1c42def..1acd5cf416121a4639c2885da3f4424f46db1429 100644
+--- a/net/minecraft/world/entity/LivingEntity.java
++++ b/net/minecraft/world/entity/LivingEntity.java
+@@ -1435,6 +1435,10 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+         } else if (attribute.is(Attributes.SCALE)) {
+             this.refreshDimensions();
+         } else if (attribute.is(Attributes.WAYPOINT_TRANSMIT_RANGE) && this.level() instanceof ServerLevel serverLevel) {
++            if (serverLevel.galeConfig().smallOptimizations.disableLocatorBar) {
++                return;
++            }
++
+             ServerWaypointManager waypointManager = serverLevel.getWaypointManager();
+             if (this.attributes.getValue(attribute) > 0.0) {
+                 waypointManager.trackWaypoint((WaypointTransmitter)this);
