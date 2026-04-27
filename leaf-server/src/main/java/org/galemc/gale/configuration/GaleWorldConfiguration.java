@@ -134,6 +134,12 @@ public class GaleWorldConfiguration extends ConfigurationPart {
         }
     }
 
+    public MobSpawning mobSpawning;
+
+    public class MobSpawning extends ConfigurationPart {
+        public boolean disableWorldTicking = false; // Leaf - skip natural mob spawning and world spawner ticks
+    }
+
     public GameplayMechanics gameplayMechanics;
 
     public class GameplayMechanics extends ConfigurationPart {

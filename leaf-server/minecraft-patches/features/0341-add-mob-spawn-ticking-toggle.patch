@@ -1,0 +1,193 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Mon, 27 Apr 2026 22:10:19 +1000
+Subject: [PATCH] add mob spawn ticking toggle
+
+
+diff --git a/net/minecraft/server/level/ServerChunkCache.java b/net/minecraft/server/level/ServerChunkCache.java
+index 7cacbc7814d47beaabf4a5bab33d7e75dea51bbd..8fbef58d49701b3146738dbace66a8f38ad22b88 100644
+--- a/net/minecraft/server/level/ServerChunkCache.java
++++ b/net/minecraft/server/level/ServerChunkCache.java
+@@ -10,7 +10,6 @@ import java.io.IOException;
+ import java.nio.file.Path;
+ import java.util.Arrays;
+ import java.util.List;
+-import java.util.Objects;
+ import java.util.Set;
+ import java.util.concurrent.CompletableFuture;
+ import java.util.concurrent.CompletionStage;
+@@ -540,7 +539,9 @@ public class ServerChunkCache extends ChunkSource implements ca.spottedleaf.moon
+ 
+         // Pufferfish start - optimize mob spawning
+         // Leaf start - optimize mob spawning
+-        if (org.dreeam.leaf.config.modules.async.AsyncMobSpawning.enabled && this.level.tickRateManager().runsNormally()) {
++        if (org.dreeam.leaf.config.modules.async.AsyncMobSpawning.enabled
++            && this.level.tickRateManager().runsNormally()
++            && !this.level.galeConfig().mobSpawning.disableWorldTicking) {
+             // updatePerPlayerMobCount();
+             // Leaf end - optimize mob spawning
+             if (firstRunSpawnCounts) {
+@@ -599,83 +600,98 @@ public class ServerChunkCache extends ChunkSource implements ca.spottedleaf.moon
+     }
+ 
+     private void tickChunks(ProfilerFiller profiler, long timeInhabited) {
++        final boolean disableSpawnTicking = this.level.galeConfig().mobSpawning.disableWorldTicking;
++
+         profiler.push("naturalSpawnCount");
+-        int naturalSpawnChunkCount = this.distanceManager.getNaturalSpawnChunkCount();
+-        // Paper start - Optional per player mob spawns
+-        NaturalSpawner.SpawnState spawnState;
+-        if ((this.spawnFriendlies || this.spawnEnemies) && this.level.paperConfig().entities.spawning.perPlayerMobSpawns) { // don't count mobs when animals and monsters are disabled
+-            if (!org.dreeam.leaf.config.modules.async.AsyncMobSpawning.enabled) { // Pufferfish - moved down when async processing
+-            // re-set mob counts
+-            updatePerPlayerMobCount(); // Leaf - optimize mob spawning
+-            lastSpawnState = NaturalSpawner.createState(naturalSpawnChunkCount, this.level.getAllEntities(), this::getFullChunk, null, true); // Pufferfish - async mob spawning
+-            } // Pufferfish - (endif) moved down when async processing
+-        } else {
+-            // Pufferfish start - async mob spawning
+-            lastSpawnState = NaturalSpawner.createState(naturalSpawnChunkCount, this.level.getAllEntities(), this::getFullChunk, !this.level.paperConfig().entities.spawning.perPlayerMobSpawns ? new LocalMobCapCalculator(this.chunkMap) : null, false);
+-            _pufferfish_spawnCountsReady.set(true);
+-            // Pufferfish end
+-        }
+-        // Paper end - Optional per player mob spawns
+-        //this.lastSpawnState = spawnState; // Pufferfish - this is managed asynchronously
+-        boolean flag = this.level.getGameRules().get(GameRules.SPAWN_MOBS) && !this.level.players().isEmpty(); // CraftBukkit
+-        int i = this.level.getGameRules().get(GameRules.RANDOM_TICK_SPEED);
++
++        boolean flag = !disableSpawnTicking && this.level.getGameRules().get(GameRules.SPAWN_MOBS) && !this.level.players().isEmpty(); // CraftBukkit
++
+         List<MobCategory> filteredSpawningCategories;
+-        if (flag && (this.spawnEnemies || this.spawnFriendlies)) { // Paper
+-            // Paper start - PlayerNaturallySpawnCreaturesEvent
+-            for (ServerPlayer entityPlayer : this.level.players()) {
+-                int chunkRange = Math.min(level.spigotConfig.mobSpawnRange, entityPlayer.getBukkitEntity().getViewDistance());
+-                chunkRange = Math.min(chunkRange, 8);
+-                entityPlayer.playerNaturallySpawnedEvent = new com.destroystokyo.paper.event.entity.PlayerNaturallySpawnCreaturesEvent(entityPlayer.getBukkitEntity(), (byte) chunkRange);
+-                entityPlayer.playerNaturallySpawnedEvent.callEvent();
+-                this.level.natureSpawnChunkMap.addPlayer(entityPlayer); // Leaf - optimize mob spawning
+-            }
+-            // Paper end - PlayerNaturallySpawnCreaturesEvent
+-            boolean flag1 = this.level.ticksPerSpawnCategory.getLong(org.bukkit.entity.SpawnCategory.ANIMAL) != 0L && this.level.getGameTime() % this.level.ticksPerSpawnCategory.getLong(org.bukkit.entity.SpawnCategory.ANIMAL) == 0L; // CraftBukkit
+-            filteredSpawningCategories = NaturalSpawner.getFilteredSpawningCategories(lastSpawnState, this.spawnFriendlies, this.spawnEnemies, flag1, this.level); // CraftBukkit // Pufferfish
+-        } else {
++
++        if (disableSpawnTicking) {
++            lastSpawnState = null;
+             filteredSpawningCategories = List.of();
++        } else {
++            int naturalSpawnChunkCount = this.distanceManager.getNaturalSpawnChunkCount();
++            // Paper start - Optional per player mob spawns
++            if ((this.spawnFriendlies || this.spawnEnemies) && this.level.paperConfig().entities.spawning.perPlayerMobSpawns) { // don't count mobs when animals and monsters are disabled
++                if (!org.dreeam.leaf.config.modules.async.AsyncMobSpawning.enabled) { // Pufferfish - moved down when async processing
++                // re-set mob counts
++                updatePerPlayerMobCount(); // Leaf - optimize mob spawning
++                lastSpawnState = NaturalSpawner.createState(naturalSpawnChunkCount, this.level.getAllEntities(), this::getFullChunk, null, true); // Pufferfish - async mob spawning
++                } // Pufferfish - (endif) moved down when async processing
++            } else {
++                // Pufferfish start - async mob spawning
++                lastSpawnState = NaturalSpawner.createState(naturalSpawnChunkCount, this.level.getAllEntities(), this::getFullChunk, !this.level.paperConfig().entities.spawning.perPlayerMobSpawns ? new LocalMobCapCalculator(this.chunkMap) : null, false);
++                _pufferfish_spawnCountsReady.set(true);
++                // Pufferfish end
++            }
++            // Paper end - Optional per player mob spawns
++            //this.lastSpawnState = spawnState; // Pufferfish - this is managed asynchronously
++            if (flag && (this.spawnEnemies || this.spawnFriendlies)) { // Paper
++                // Paper start - PlayerNaturallySpawnCreaturesEvent
++                for (ServerPlayer entityPlayer : this.level.players()) {
++                    int chunkRange = Math.min(level.spigotConfig.mobSpawnRange, entityPlayer.getBukkitEntity().getViewDistance());
++                    chunkRange = Math.min(chunkRange, 8);
++                    entityPlayer.playerNaturallySpawnedEvent = new com.destroystokyo.paper.event.entity.PlayerNaturallySpawnCreaturesEvent(entityPlayer.getBukkitEntity(), (byte) chunkRange);
++                    entityPlayer.playerNaturallySpawnedEvent.callEvent();
++                    this.level.natureSpawnChunkMap.addPlayer(entityPlayer); // Leaf - optimize mob spawning
++                }
++                // Paper end - PlayerNaturallySpawnCreaturesEvent
++                boolean flag1 = this.level.ticksPerSpawnCategory.getLong(org.bukkit.entity.SpawnCategory.ANIMAL) != 0L && this.level.getGameTime() % this.level.ticksPerSpawnCategory.getLong(org.bukkit.entity.SpawnCategory.ANIMAL) == 0L; // CraftBukkit
++                filteredSpawningCategories = NaturalSpawner.getFilteredSpawningCategories(lastSpawnState, this.spawnFriendlies, this.spawnEnemies, flag1, this.level); // CraftBukkit // Pufferfish
++            } else {
++                filteredSpawningCategories = List.of();
++            }
+         }
+ 
+         List<LevelChunk> list = this.spawningChunks;
+ 
+-        try {
+-            profiler.popPush("filteringSpawningChunks");
+-            this.level.natureSpawnChunkMap.build(this.level.moonrise$getPlayerTickingChunks(), list); // Leaf - optimize mob spawning
+-            profiler.popPush("shuffleSpawningChunks");
+-            // Paper start - chunk tick iteration optimisation
+-            // Leaf start - paw optimization - Only set seed if is really used
+-            if (!this.level.paperConfig().entities.spawning.perPlayerMobSpawns) {
+-                this.shuffleRandom.setSeed(this.level.random.nextLong());
+-                Util.shuffle(list, this.shuffleRandom); // Paper - Optional per player mob spawns; do not need this when per-player is enabled
+-            }
+-            // Leaf end - paw optimization - Only set seed if is really used
+-            // Paper end - chunk tick iteration optimisation
+-            profiler.popPush("tickSpawningChunks");
+-
+-            // Leaf start - optimize mob spawning
+-            if (!org.dreeam.leaf.config.modules.async.AsyncMobSpawning.enabled || _pufferfish_spawnCountsReady.get()) {
+-                NaturalSpawner.SpawnState currentState = lastSpawnState;
+-                if (currentState != null) {
+-                    // AsyncMobSpawning && _pufferfish_spawnCountsReady
+-                    if (org.dreeam.leaf.config.modules.async.AsyncMobSpawning.enabled) {
+-                        updatePerPlayerMobCount();
+-                    }
+-                    currentState.applyPerPlayerMobCount(level);
+-                    if (list instanceof it.unimi.dsi.fastutil.objects.ObjectArrayList<LevelChunk> levelChunks) {
+-                        Object[] raw = levelChunks.elements();
+-                        for (int _index = 0, _size = levelChunks.size(); _index < _size; _index++) {
+-                            this.tickSpawningChunk((LevelChunk) raw[_index], timeInhabited, filteredSpawningCategories, currentState); // Pufferfish
++        if (!disableSpawnTicking) {
++            try {
++                profiler.popPush("filteringSpawningChunks");
++                this.level.natureSpawnChunkMap.build(this.level.moonrise$getPlayerTickingChunks(), list); // Leaf - optimize mob spawning
++                profiler.popPush("shuffleSpawningChunks");
++                // Paper start - chunk tick iteration optimisation
++                // Leaf start - paw optimization - Only set seed if is really used
++                if (!this.level.paperConfig().entities.spawning.perPlayerMobSpawns) {
++                    this.shuffleRandom.setSeed(this.level.random.nextLong());
++                    Util.shuffle(list, this.shuffleRandom); // Paper - Optional per player mob spawns; do not need this when per-player is enabled
++                }
++                // Leaf end - paw optimization - Only set seed if is really used
++                // Paper end - chunk tick iteration optimisation
++                profiler.popPush("tickSpawningChunks");
++
++                // Leaf start - optimize mob spawning
++                if (!org.dreeam.leaf.config.modules.async.AsyncMobSpawning.enabled || _pufferfish_spawnCountsReady.get()) {
++                    NaturalSpawner.SpawnState currentState = lastSpawnState;
++                    if (currentState != null) {
++                        // AsyncMobSpawning && _pufferfish_spawnCountsReady
++                        if (org.dreeam.leaf.config.modules.async.AsyncMobSpawning.enabled) {
++                            updatePerPlayerMobCount();
+                         }
+-                    } else {
+-                        for (LevelChunk levelChunk : list) {
+-                            this.tickSpawningChunk(levelChunk, timeInhabited, filteredSpawningCategories, currentState); // Pufferfish
++                        currentState.applyPerPlayerMobCount(level);
++                        if (list instanceof it.unimi.dsi.fastutil.objects.ObjectArrayList<LevelChunk> levelChunks) {
++                            Object[] raw = levelChunks.elements();
++                            for (int _index = 0, _size = levelChunks.size(); _index < _size; _index++) {
++                                this.tickSpawningChunk((LevelChunk) raw[_index], timeInhabited, filteredSpawningCategories, currentState); // Pufferfish
++                            }
++                        } else {
++                            for (LevelChunk levelChunk : list) {
++                                this.tickSpawningChunk(levelChunk, timeInhabited, filteredSpawningCategories, currentState); // Pufferfish
++                            }
+                         }
+                     }
+                 }
++                // Leaf end - optimize mob spawning
++            } finally {
++                level.natureSpawnChunkMap.clear(); // Leaf - optimize mob spawning
++
++                list.clear();
+             }
+-            // Leaf end - optimize mob spawning
+-        } finally {
+-            this.level.natureSpawnChunkMap.clear(); // Leaf - optimize mob spawning
++        } else {
++            level.natureSpawnChunkMap.clear();
++
+             list.clear();
+         }
+ 
