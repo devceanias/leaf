@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Mon, 27 Apr 2026 23:22:25 +1000
+Subject: [PATCH] optimise enchant tick effect iteration
+
+
+diff --git a/net/minecraft/world/item/enchantment/EnchantmentHelper.java b/net/minecraft/world/item/enchantment/EnchantmentHelper.java
+index 2677f911d33441b3d0eacc703a372de05d89acf1..a8924fbfc12a3a019d6dc3e61f265031471016b3 100644
+--- a/net/minecraft/world/item/enchantment/EnchantmentHelper.java
++++ b/net/minecraft/world/item/enchantment/EnchantmentHelper.java
+@@ -271,7 +271,35 @@ public class EnchantmentHelper {
+     }
+ 
+     public static void tickEffects(ServerLevel level, LivingEntity entity) {
+-        runIterationOnEquipment(entity, (enchantment, level1, item) -> enchantment.value().tick(level, level1, item, entity));
++        for (final EquipmentSlot slot : EquipmentSlot.VALUES_ARRAY) { // Gale - JettPack - reduce array allocations
++            final ItemStack stack = entity.getItemBySlot(slot);
++
++            if (stack.isEmpty()) {
++                continue;
++            }
++
++            final ItemEnchantments enchantments = stack.get(DataComponents.ENCHANTMENTS);
++
++            if (enchantments == null || enchantments.isEmpty()) {
++                continue;
++            }
++
++            EnchantedItemInUse item = null;
++
++            for (final Entry<Holder<Enchantment>> entry : enchantments.leaf$entrySet()) { // Leaf - reduce enchantment allocations
++                final Enchantment value = entry.getKey().value();
++
++                if (!value.effects().has(EnchantmentEffectComponents.TICK) || !value.matchingSlot(slot)) {
++                    continue;
++                }
++
++                if (item == null) {
++                    item = new EnchantedItemInUse(stack, slot, entity);
++                }
++
++                value.tick(level, entry.getIntValue(), item, entity);
++            }
++        }
+     }
+ 
+     public static int getEnchantmentLevel(Holder<Enchantment> enchantment, LivingEntity entity) {
