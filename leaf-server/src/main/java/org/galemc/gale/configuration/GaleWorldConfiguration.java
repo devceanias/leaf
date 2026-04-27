@@ -36,8 +36,10 @@ public class GaleWorldConfiguration extends ConfigurationPart {
     public SmallOptimizations smallOptimizations;
 
     public class SmallOptimizations extends ConfigurationPart {
-
+        public boolean disableMobSpawnTicking = false; // Leaf - skip natural mob spawning and world spawner ticks
+        public boolean disableAutosaving = false; // Leaf - disable automatic world, chunk, entity, and poi persistence
         public boolean saveFireworks = true; // Gale - EMC - make saving fireworks configurable
+
         public boolean useOptimizedSheepOffspringColor = true; // Gale - carpet-fixes - optimize sheep offspring color
         public boolean applyFakebright = true; // Leaf - use fake fullbright data instead of per-chunk light
 
@@ -132,12 +134,6 @@ public class GaleWorldConfiguration extends ConfigurationPart {
                 EntityType.FIREWORK_ROCKET
             );
         }
-    }
-
-    public MobSpawning mobSpawning;
-
-    public class MobSpawning extends ConfigurationPart {
-        public boolean disableWorldTicking = false; // Leaf - skip natural mob spawning and world spawner ticks
     }
 
     public GameplayMechanics gameplayMechanics;

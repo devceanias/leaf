@@ -1,0 +1,240 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Mon, 27 Apr 2026 22:32:58 +1000
+Subject: [PATCH] add world autosave toggle
+
+
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java
+index 0a2470bb3e0b4fa7c92c02e05c7d9f0d5ecdd7d0..b05eddf3e099e37fcf614827e972bf3e958c0431 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java
+@@ -109,6 +109,8 @@ public final class ChunkHolderManager {
+         return Long.compare(coord1, coord2);
+     });
+ 
++    private boolean autoSaving;
++
+     // mapping of counter id -> (mapping of pos->count)
+     private final ConcurrentLong2ReferenceChainedHashTable<ConcurrentLong2LongChainedHashTable> ticketCounters = new ConcurrentLong2ReferenceChainedHashTable<>();
+ 
+@@ -244,23 +246,30 @@ public final class ChunkHolderManager {
+         final long currentTick = this.currentTick;
+         final long maxSaveTime = currentTick - Math.max(1L, PlatformHooks.get().configAutoSaveInterval(this.world));
+         final int maxToSave = PlatformHooks.get().configMaxAutoSavePerTick(this.world);
+-        for (int autoSaved = 0; autoSaved < maxToSave && !this.autoSaveQueue.isEmpty();) {
+-            final NewChunkHolder holder = this.autoSaveQueue.first();
+ 
+-            if (holder.lastAutoSave > maxSaveTime) {
+-                break;
+-            }
++        autoSaving = true;
+ 
+-            this.autoSaveQueue.remove(holder);
++        try {
++            for (int autoSaved = 0; autoSaved < maxToSave && !this.autoSaveQueue.isEmpty();) {
++                final NewChunkHolder holder = this.autoSaveQueue.first();
+ 
+-            holder.lastAutoSave = currentTick;
+-            if (holder.save(false) != null) {
+-                ++autoSaved;
+-            }
++                if (holder.lastAutoSave > maxSaveTime) {
++                    break;
++                }
+ 
+-            if (holder.getChunkStatus().isOrAfter(FullChunkStatus.FULL)) {
+-                reschedule.add(holder);
++                this.autoSaveQueue.remove(holder);
++
++                holder.lastAutoSave = currentTick;
++                if (holder.save(false) != null) {
++                    ++autoSaved;
++                }
++
++                if (holder.getChunkStatus().isOrAfter(FullChunkStatus.FULL)) {
++                    reschedule.add(holder);
++                }
+             }
++        } finally {
++            autoSaving = false;
+         }
+ 
+         for (final NewChunkHolder holder : reschedule) {
+@@ -270,6 +279,10 @@ public final class ChunkHolderManager {
+         }
+     }
+ 
++    boolean isAutoSaving() {
++        return autoSaving;
++    }
++
+     public void saveAllChunks(final boolean flush, final boolean shutdown, final boolean logProgress,
+                               final boolean emergency) {
+         final List<NewChunkHolder> holders = this.getChunkHolders();
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/NewChunkHolder.java b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/NewChunkHolder.java
+index 8d59f99d6b157c126f8d96082785f220de35bbd7..c5bd444bf570da2a363613ddf651d7d2f46d2c35 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/NewChunkHolder.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/NewChunkHolder.java
+@@ -876,7 +876,8 @@ public final class NewChunkHolder {
+         final ChunkEntitySlices entityChunk = state.entityChunk();
+         final PoiChunk poiChunk = state.poiChunk();
+ 
+-        final boolean shouldLevelChunkNotSave = PlatformHooks.get().forceNoSave(chunk);
++        final boolean disableAutoSaving = world.galeConfig().smallOptimizations.disableAutosaving;
++        final boolean shouldLevelChunkNotSave = disableAutoSaving || PlatformHooks.get().forceNoSave(chunk);
+ 
+         // unload chunk data
+         if (chunk != null) {
+@@ -900,7 +901,10 @@ public final class NewChunkHolder {
+         // unload entity data
+         if (entityChunk != null) {
+             final Completable<CompoundTag>[] entityWrite = new Completable[1];
+-            this.saveEntities(entityChunk, true, entityWrite);
++
++            if (!shouldLevelChunkNotSave) {
++                this.saveEntities(entityChunk, true, entityWrite);
++            }
+ 
+             if (entityChunk.unload()) {
+                 final ReentrantAreaLock.Node schedulingLock = this.scheduler.schedulingLockArea.lock(this.chunkX, this.chunkZ);
+@@ -1692,12 +1696,16 @@ public final class NewChunkHolder {
+             }
+         }
+ 
+-        final boolean forceNoSaveChunk = PlatformHooks.get().forceNoSave(chunk);
++        final boolean disableAutosaving = !shutdown
++            && world.galeConfig().smallOptimizations.disableAutosaving
++            && scheduler.chunkHolderManager.isAutoSaving();
++
++        final boolean forceNoSaveChunk = disableAutosaving || PlatformHooks.get().forceNoSave(chunk);
+ 
+         // can only synchronously save worldgen chunks during shutdown
+         boolean canSaveChunk = !forceNoSaveChunk && (chunk != null && ((shutdown || chunk instanceof LevelChunk) && chunk.isUnsaved()));
+         boolean canSavePOI = !forceNoSaveChunk && (poi != null && poi.isDirty());
+-        boolean canSaveEntities = entities != null;
++        boolean canSaveEntities = !forceNoSaveChunk && entities != null;
+ 
+         if (canSaveChunk) {
+             canSaveChunk = this.saveChunk(chunk, false, null);
+diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/MinecraftServer.java
+index 651ce7ae0b78c83d5dfab9adfac80d66a62741d4..44b5328b020e451ac27c1fd880a4165a44cce904 100644
+--- a/net/minecraft/server/MinecraftServer.java
++++ b/net/minecraft/server/MinecraftServer.java
+@@ -1002,7 +1002,10 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+                 LOGGER.info("Saving chunks for level '{}'/{}", serverLevel, serverLevel.dimension().identifier());
+             }
+ 
+-            serverLevel.save(null, flush, SharedConstants.DEBUG_DONT_SAVE_WORLD || serverLevel.noSave && !force, close); // Paper - add close param
++            final boolean skipSave = SharedConstants.DEBUG_DONT_SAVE_WORLD
++                || ((serverLevel.noSave || autoSaving && serverLevel.galeConfig().smallOptimizations.disableAutosaving) && !force);
++
++            serverLevel.save(null, flush, skipSave, close); // Paper - add close param
+             // Leaf start - SparklyPaper - parallel world ticking - Shutdown handling for async reads
+             // Only prepare shutdown if 'close' is true, indicating this save is part of server shutdown
+             if (close && org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled) {
+@@ -1040,6 +1043,10 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+         return var4;
+     }
+ 
++    public boolean isAutoSaving() {
++        return autoSaving;
++    }
++
+     @Override
+     public void close() {
+         this.stopServer();
+@@ -1056,6 +1063,8 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+     }
+     // CraftBukkit end
+ 
++    private boolean autoSaving;
++
+     public void stopServer() {
+         // CraftBukkit start - prevent double stopping on multiple threads
+         synchronized(this.stopLock) {
+@@ -1728,7 +1737,7 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+                 this.playerList.saveAll(playerSaveInterval);
+             }
+             for (final ServerLevel level : this.getAllLevels()) {
+-                if (level.paperConfig().chunks.autoSaveInterval.value() > 0) {
++                if (level.paperConfig().chunks.autoSaveInterval.value() > 0 && !level.galeConfig().smallOptimizations.disableAutosaving) {
+                     level.saveIncrementally(fullSave);
+                 }
+             }
+@@ -1783,9 +1792,17 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+         LOGGER.debug("Autosave started");
+         ProfilerFiller profilerFiller = Profiler.get();
+         profilerFiller.push("save");
+-        this.saveEverything(true, false, false);
+-        profilerFiller.pop();
+-        LOGGER.debug("Autosave finished");
++
++        autoSaving = true;
++
++        try {
++            this.saveEverything(true, false, false);
++        } finally {
++            autoSaving = false;
++
++            profilerFiller.pop();
++            LOGGER.debug("Autosave finished");
++        }
+     }
+ 
+     private void logTickMethodTime(long startTime) {
+diff --git a/net/minecraft/server/level/ChunkMap.java b/net/minecraft/server/level/ChunkMap.java
+index d109f450cd6e41fe2a884eb105752d63a21ddbfe..aaee85544696e822bbc08e0264ed3fec86731a14 100644
+--- a/net/minecraft/server/level/ChunkMap.java
++++ b/net/minecraft/server/level/ChunkMap.java
+@@ -402,7 +402,11 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+         this.poiManager.tick(hasMoreTime);
+         profilerFiller.popPush("chunk_unload");
+         if (!this.level.noSave()) {
+-            this.processUnloads(hasMoreTime);
++            this.processUnloads();
++
++            if (!level.galeConfig().smallOptimizations.disableAutosaving) {
++                runAutosave();
++            }
+         }
+ 
+         profilerFiller.pop();
+@@ -412,8 +416,11 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+         throw new UnsupportedOperationException(); // Paper - rewrite chunk system
+     }
+ 
+-    private void processUnloads(BooleanSupplier hasMoreTime) {
++    private void processUnloads() {
+         ((ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemServerLevel)this.level).moonrise$getChunkTaskScheduler().chunkHolderManager.processUnloads(); // Paper - rewrite chunk system
++    }
++
++    private void runAutosave() {
+         ((ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemServerLevel)this.level).moonrise$getChunkTaskScheduler().chunkHolderManager.autoSave(); // Paper - rewrite chunk system
+     }
+ 
+diff --git a/net/minecraft/server/level/ServerLevel.java b/net/minecraft/server/level/ServerLevel.java
+index 251f33381bc1de45d21c6c3ed4ca84244a2bccce..ad3714c0c27f7db0a5248ce3a445e50f68e700d9 100644
+--- a/net/minecraft/server/level/ServerLevel.java
++++ b/net/minecraft/server/level/ServerLevel.java
+@@ -1720,6 +1720,10 @@ public class ServerLevel extends Level implements ServerEntityGetter, WorldGenLe
+ 
+     // Paper start - Incremental chunk and player saving
+     public void saveIncrementally(boolean doFull) {
++        if (galeConfig().smallOptimizations.disableAutosaving) {
++            return;
++        }
++
+         if (doFull) {
+             org.bukkit.Bukkit.getPluginManager().callEvent(new org.bukkit.event.world.WorldSaveEvent(this.getWorld()));
+         }
+@@ -1769,6 +1773,10 @@ public class ServerLevel extends Level implements ServerEntityGetter, WorldGenLe
+         }
+         // Paper end - add close param
+ 
++        if (galeConfig().smallOptimizations.disableAutosaving && server.isAutoSaving()) {
++            return;
++        }
++
+         // CraftBukkit start - moved from MinecraftServer#saveAllChunks
+         ServerLevel serverLevel1 = this;
+ 

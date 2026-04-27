@@ -17,21 +17,21 @@ index 7cacbc7814d47beaabf4a5bab33d7e75dea51bbd..8fbef58d49701b3146738dbace66a8f3
  import java.util.concurrent.CompletableFuture;
  import java.util.concurrent.CompletionStage;
 @@ -540,7 +539,9 @@ public class ServerChunkCache extends ChunkSource implements ca.spottedleaf.moon
- 
+
          // Pufferfish start - optimize mob spawning
          // Leaf start - optimize mob spawning
 -        if (org.dreeam.leaf.config.modules.async.AsyncMobSpawning.enabled && this.level.tickRateManager().runsNormally()) {
 +        if (org.dreeam.leaf.config.modules.async.AsyncMobSpawning.enabled
 +            && this.level.tickRateManager().runsNormally()
-+            && !this.level.galeConfig().mobSpawning.disableWorldTicking) {
++            && !level.galeConfig().smallOptimizations.disableMobSpawnTicking) {
              // updatePerPlayerMobCount();
              // Leaf end - optimize mob spawning
              if (firstRunSpawnCounts) {
 @@ -599,83 +600,98 @@ public class ServerChunkCache extends ChunkSource implements ca.spottedleaf.moon
      }
- 
+
      private void tickChunks(ProfilerFiller profiler, long timeInhabited) {
-+        final boolean disableSpawnTicking = this.level.galeConfig().mobSpawning.disableWorldTicking;
++        final boolean disableSpawnTicking = level.galeConfig().smallOptimizations.disableMobSpawnTicking;
 +
          profiler.push("naturalSpawnCount");
 -        int naturalSpawnChunkCount = this.distanceManager.getNaturalSpawnChunkCount();
@@ -107,9 +107,9 @@ index 7cacbc7814d47beaabf4a5bab33d7e75dea51bbd..8fbef58d49701b3146738dbace66a8f3
 +                filteredSpawningCategories = List.of();
 +            }
          }
- 
+
          List<LevelChunk> list = this.spawningChunks;
- 
+
 -        try {
 -            profiler.popPush("filteringSpawningChunks");
 -            this.level.natureSpawnChunkMap.build(this.level.moonrise$getPlayerTickingChunks(), list); // Leaf - optimize mob spawning
@@ -190,4 +190,3 @@ index 7cacbc7814d47beaabf4a5bab33d7e75dea51bbd..8fbef58d49701b3146738dbace66a8f3
 +
              list.clear();
          }
- 
