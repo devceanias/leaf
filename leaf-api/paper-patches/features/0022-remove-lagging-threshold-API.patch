@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Mon, 27 Apr 2026 11:33:43 +1000
+Subject: [PATCH] remove lagging threshold API
+
+
+diff --git a/src/main/java/org/bukkit/Bukkit.java b/src/main/java/org/bukkit/Bukkit.java
+index eb84f487ffa872415eff295eff32dce954f7b79b..72011d95d6afe4c491435545a2fc25bd485d1ac5 100644
+--- a/src/main/java/org/bukkit/Bukkit.java
++++ b/src/main/java/org/bukkit/Bukkit.java
+@@ -3081,17 +3081,6 @@ public final class Bukkit {
+     }
+     // Purpur end - Bring back server name
+ 
+-    // Purpur start - Lagging threshold
+-    /**
+-     * Check if server is lagging according to laggy threshold setting
+-     *
+-     * @return True if lagging
+-     */
+-    public static boolean isLagging() {
+-        return server.isLagging();
+-    }
+-    // Purpur end - Lagging threshold
+-
+     // Purpur start - Added the ability to add combustible items
+     /**
+      * Add an Item as fuel for furnaces
+diff --git a/src/main/java/org/bukkit/Server.java b/src/main/java/org/bukkit/Server.java
+index d1d7213185073e2bf644cf5967a2334b5b63c250..8cc4cb6ff8c9aa401a6830364351790452e17bb9 100644
+--- a/src/main/java/org/bukkit/Server.java
++++ b/src/main/java/org/bukkit/Server.java
+@@ -2841,15 +2841,6 @@ public interface Server extends PluginMessageRecipient, net.kyori.adventure.audi
+     String getServerName();
+     // Purpur end - Bring back server name
+ 
+-    // Purpur start - Lagging threshold
+-    /**
+-     * Check if server is lagging according to laggy threshold setting
+-     *
+-     * @return True if lagging
+-     */
+-    boolean isLagging();
+-    // Purpur end - Lagging threshold
+-
+     // Purpur start - Added the ability to add combustible items
+     /**
+      * Add an Item as fuel for furnaces
