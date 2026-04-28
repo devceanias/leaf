@@ -1,0 +1,197 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Tue, 28 Apr 2026 22:33:28 +1000
+Subject: [PATCH] cache player chunk loader decisions
+
+
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/player/RegionizedPlayerChunkLoader.java b/ca/spottedleaf/moonrise/patches/chunk_system/player/RegionizedPlayerChunkLoader.java
+index e48233148489d5c4fae8be80cf1194a3ad1e0c2f..7fa74bfbf808635c4b6a32898f3aeb0851e4811f 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/player/RegionizedPlayerChunkLoader.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/player/RegionizedPlayerChunkLoader.java
+@@ -32,7 +32,9 @@ import net.minecraft.server.level.ServerLevel;
+ import net.minecraft.server.level.ServerPlayer;
+ import net.minecraft.server.level.TicketType;
+ import net.minecraft.server.network.PlayerChunkSender;
++import net.minecraft.util.Mth;
+ import net.minecraft.world.level.ChunkPos;
++import net.minecraft.world.level.border.WorldBorder;
+ import net.minecraft.world.level.chunk.ChunkAccess;
+ import net.minecraft.world.level.chunk.LevelChunk;
+ import net.minecraft.world.level.chunk.status.ChunkStatus;
+@@ -399,10 +401,23 @@ public final class RegionizedPlayerChunkLoader {
+         private final LongHeapPriorityQueue loadingQueue = new LongHeapPriorityQueue(CLOSEST_MANHATTAN_DIST);
+         private final LongHeapPriorityQueue loadQueue = new LongHeapPriorityQueue(CLOSEST_MANHATTAN_DIST);
+ 
++        private boolean trackByWorldBorder;
++
++        private int trackMinChunkX = Integer.MIN_VALUE;
++        private int trackMaxChunkX = Integer.MAX_VALUE;
++        private int trackMinChunkZ = Integer.MIN_VALUE;
++        private int trackMaxChunkZ = Integer.MAX_VALUE;
++
++        private final Long2ByteOpenHashMap sendChunkCache = new Long2ByteOpenHashMap();
++        private final Long2ByteOpenHashMap tickChunkCache = new Long2ByteOpenHashMap();
++
+         private final Long2ByteOpenHashMap sendNeighbourCache = new Long2ByteOpenHashMap();
+         private final Long2ByteOpenHashMap tickNeighbourCache = new Long2ByteOpenHashMap();
+ 
+         {
++            sendChunkCache.defaultReturnValue((byte) 0);
++            tickChunkCache.defaultReturnValue((byte) 0);
++
+             sendNeighbourCache.defaultReturnValue((byte) 0);
+             tickNeighbourCache.defaultReturnValue((byte) 0);
+         }
+@@ -698,22 +713,74 @@ public final class RegionizedPlayerChunkLoader {
+             return configLimit;
+         }
+ 
++        private void refreshBorderTrackBounds() {
++            final boolean track = world.galeConfig().smallOptimizations.loadChunks.preventTrackingOutsideWorldBorder;
++
++            if (!track) {
++                trackByWorldBorder = false;
++
++                return;
++            }
++
++            final WorldBorder border = world.getWorldBorder();
++
++            trackByWorldBorder = true;
++            trackMinChunkX = Mth.floor(border.getMinX()) >> 4;
++            trackMaxChunkX = (Mth.ceil(border.getMaxX()) - 1) >> 4;
++            trackMinChunkZ = Mth.floor(border.getMinZ()) >> 4;
++            trackMaxChunkZ = (Mth.ceil(border.getMaxZ()) - 1) >> 4;
++        }
++
++        private void clearChunkViewCaches() {
++            sendChunkCache.clear();
++            tickChunkCache.clear();
++        }
++
+         private boolean wantChunkSent(final int chunkX, final int chunkZ) {
++            final long chunk = CoordinateUtils.getChunkKey(chunkX, chunkZ);
++            final byte cached = sendChunkCache.get(chunk);
++
++            if (cached != 0) {
++                return cached == 1;
++            }
++
+             final int dx = this.lastChunkX - chunkX;
+             final int dz = this.lastChunkZ - chunkZ;
+-            return (Math.max(Math.abs(dx), Math.abs(dz)) <= (this.lastSendDistance + 1)) && wantChunkLoaded(
++
++            final boolean result = (Math.max(Math.abs(dx), Math.abs(dz)) <= (this.lastSendDistance + 1)) && wantChunkLoaded(
+                 this.lastChunkX, this.lastChunkZ, chunkX, chunkZ, this.lastSendDistance
+             );
++
++            sendChunkCache.put(chunk, result ? (byte)1 : (byte)2);
++
++            return result;
+         }
+ 
+         private boolean wantChunkTicked(final int chunkX, final int chunkZ) {
++            final long chunk = CoordinateUtils.getChunkKey(chunkX, chunkZ);
++            final byte cached = tickChunkCache.get(chunk);
++
++            if (cached != 0) {
++                return cached == 1;
++            }
++
+             final int dx = this.lastChunkX - chunkX;
+             final int dz = this.lastChunkZ - chunkZ;
+-            return Math.max(Math.abs(dx), Math.abs(dz)) <= this.lastTickDistance;
++
++            final boolean result = Math.max(Math.abs(dx), Math.abs(dz)) <= this.lastTickDistance;
++
++            tickChunkCache.put(chunk, result ? (byte)1 : (byte)2);
++
++            return result;
+         }
+ 
+         private boolean shouldTrackChunk(final int chunkX, final int chunkZ) {
+-            return world.leaf$shouldTrackChunk(chunkX, chunkZ);
++            return !trackByWorldBorder || (
++                chunkX >= trackMinChunkX &&
++                chunkX <= trackMaxChunkX &&
++                chunkZ >= trackMinChunkZ &&
++                chunkZ <= trackMaxChunkZ
++            );
+         }
+ 
+         private boolean areNeighboursGenerated(final int chunkX, final int chunkZ, final int radius) {
+@@ -760,6 +827,9 @@ public final class RegionizedPlayerChunkLoader {
+             if (this.removed) {
+                 throw new IllegalStateException("Ticking removed player chunk loader");
+             }
++
++            refreshBorderTrackBounds();
++
+             // update rate limits
+             final double loadRate = this.getMaxChunkLoadRate();
+             final double genRate = this.getMaxChunkGenRate();
+@@ -1085,6 +1155,9 @@ public final class RegionizedPlayerChunkLoader {
+             if (this.removed) {
+                 throw new IllegalStateException("Updating removed player chunk loader");
+             }
++
++            refreshBorderTrackBounds();
++
+             final ViewDistances playerDistances = ((ChunkSystemServerPlayer)this.player).moonrise$getViewDistanceHolder().getViewDistances();
+             final ViewDistances worldDistances = ((ChunkSystemServerLevel)this.world).moonrise$getViewDistanceHolder().getViewDistances();
+ 
+@@ -1092,6 +1165,7 @@ public final class RegionizedPlayerChunkLoader {
+                     playerDistances.tickViewDistance, worldDistances.tickViewDistance,
+                     playerDistances.loadViewDistance, worldDistances.loadViewDistance
+             );
++
+             // load view cannot be less-than tick view + 1
+             final int loadViewDistance = getLoadViewDistance(tickViewDistance, playerDistances.loadViewDistance, worldDistances.loadViewDistance);
+             // send view cannot be greater-than load view
+@@ -1167,8 +1241,11 @@ public final class RegionizedPlayerChunkLoader {
+             this.lastTickDistance = tickViewDistance;
+             this.canGenerateChunks = canGenerateChunks;
+ 
++            clearChunkViewCaches();
++
+             // +1 since we need to load chunks +1 around the load view distance...
+             final long[] toIterate = ParallelSearchRadiusIteration.getSearchIteration(loadViewDistance + 1);
++
+             // the iteration order is by increasing manhattan distance - so, we do NOT need to
+             // sort anything in the queue!
+             for (final long deltaChunk : toIterate) {
+@@ -1189,15 +1266,9 @@ public final class RegionizedPlayerChunkLoader {
+                     continue;
+                 }
+ 
+-                final int manhattanDistance = Math.abs(dx) + Math.abs(dz);
+-
+-                // since chunk sending is not by radius alone, we need an extra check here to account for
+-                // everything <= sendDistance
+-                // Note: Vanilla may want to send chunks outside the send view distance, so we do need
+-                // the dist <= view check
+-                final boolean sendChunk = (squareDistance <= (sendViewDistance + 1))
+-                    && wantChunkLoaded(currentChunkX, currentChunkZ, chunkX, chunkZ, sendViewDistance);
++                final boolean sendChunk = wantChunkSent(chunkX, chunkZ);
+                 final boolean sentChunk = sendChunk ? this.sentChunks.contains(chunk) : this.sentChunks.remove(chunk);
++                final boolean tickChunk = wantChunkTicked(chunkX, chunkZ);
+ 
+                 if (!sendChunk && sentChunk) {
+                     // have sent the chunk, but don't want it anymore
+@@ -1206,6 +1277,7 @@ public final class RegionizedPlayerChunkLoader {
+                 }
+ 
+                 final byte stage = this.chunkTicketStage.get(chunk);
++
+                 switch (stage) {
+                     case CHUNK_TICKET_STAGE_NONE: {
+                         // we want the chunk to be at least loaded
+@@ -1230,7 +1302,7 @@ public final class RegionizedPlayerChunkLoader {
+                         if (sendChunk && !sentChunk && (this.asyncSender == null || !this.asyncSender.contains(chunk))) { // Leaf - async chunk sender
+                             this.sendQueue.enqueue(chunk);
+                         }
+-                        if (squareDistance <= tickViewDistance) {
++                        if (tickChunk) {
+                             this.tickingQueue.enqueue(chunk);
+                         }
+                         break;
