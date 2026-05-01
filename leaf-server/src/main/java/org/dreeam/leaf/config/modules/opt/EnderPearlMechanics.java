@@ -6,6 +6,7 @@ import org.dreeam.leaf.config.EnumConfigCategory;
 public class EnderPearlMechanics extends ConfigModules {
     public static boolean retainMomentum = true;
     public static boolean preventGlitch = true;
+    public static boolean logActions = false;
 
     public String getBasePath() {
         return EnumConfigCategory.GAMEPLAY.getBaseKeyName() + ".pearls";
@@ -37,6 +38,19 @@ public class EnderPearlMechanics extends ConfigModules {
                 """,
                 """
                 防止常见的末影珍珠卡位/穿墙问题。
+                """
+            )
+        );
+
+        logActions = config.getBoolean(
+            base + ".log-actions",
+            logActions,
+            config.pickStringRegionBased(
+                """
+                Logs detailed pearl teleport actions for debugging.
+                """,
+                """
+                记录详细的末影珍珠解析与传送行为，用于调试。
                 """
             )
         );

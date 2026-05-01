@@ -5,10 +5,10 @@ Subject: [PATCH] retain player momentum after pearl teleport
 
 
 diff --git a/net/minecraft/world/entity/projectile/throwableitemprojectile/ThrownEnderpearl.java b/net/minecraft/world/entity/projectile/throwableitemprojectile/ThrownEnderpearl.java
-index 41a30a36e3905b19f5e9a52a94d6a3ec38ed3968..c0fb32d1bddfdf959cfc5d83b74e45e6a0f4814e 100644
+index fb282a076a977ade88c847ca3de5ff6d610a91be..6a51a9790509c7bfc6c847f164a0ce1e991ea34a 100644
 --- a/net/minecraft/world/entity/projectile/throwableitemprojectile/ThrownEnderpearl.java
 +++ b/net/minecraft/world/entity/projectile/throwableitemprojectile/ThrownEnderpearl.java
-@@ -123,7 +123,16 @@ public class ThrownEnderpearl extends ThrowableItemProjectile {
+@@ -127,7 +127,16 @@ public class ThrownEnderpearl extends ThrowableItemProjectile {
                          // Store pre teleportation position as the teleport has been moved up.
                          final double preTeleportX = serverPlayer.getX(), preTeleportY = serverPlayer.getY(), preTeleportZ = serverPlayer.getZ();
                          final float preTeleportYRot = serverPlayer.getYRot(), preTeleportXRot = serverPlayer.getXRot();
@@ -25,4 +25,4 @@ index 41a30a36e3905b19f5e9a52a94d6a3ec38ed3968..c0fb32d1bddfdf959cfc5d83b74e45e6
 +                        ServerPlayer serverPlayer1 = taskServerPlayer.teleport(new TeleportTransition(serverLevel, target, velocity, 0.0F, 0.0F, Relative.union(Relative.ROTATION, Relative.DELTA), TeleportTransition.DO_NOTHING, org.bukkit.event.player.PlayerTeleportEvent.TeleportCause.ENDER_PEARL));
                          if (serverPlayer1 == null) {
                              this.discard(org.bukkit.event.entity.EntityRemoveEvent.Cause.HIT);
-                             return;
+ 

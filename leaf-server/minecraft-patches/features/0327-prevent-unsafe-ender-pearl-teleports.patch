@@ -5,38 +5,51 @@ Subject: [PATCH] prevent unsafe ender pearl teleports
 
 
 diff --git a/net/minecraft/world/entity/projectile/throwableitemprojectile/ThrownEnderpearl.java b/net/minecraft/world/entity/projectile/throwableitemprojectile/ThrownEnderpearl.java
-index 2fe748ab39602b1f3d2c4f9982375e582806828c..41a30a36e3905b19f5e9a52a94d6a3ec38ed3968 100644
+index 2fe748ab39602b1f3d2c4f9982375e582806828c..fb282a076a977ade88c847ca3de5ff6d610a91be 100644
 --- a/net/minecraft/world/entity/projectile/throwableitemprojectile/ThrownEnderpearl.java
 +++ b/net/minecraft/world/entity/projectile/throwableitemprojectile/ThrownEnderpearl.java
-@@ -1,6 +1,7 @@
- package net.minecraft.world.entity.projectile.throwableitemprojectile;
+@@ -2,6 +2,7 @@ package net.minecraft.world.entity.projectile.throwableitemprojectile;
  
  import java.util.UUID;
-+import org.bukkit.event.entity.EntityRemoveEvent;
  import net.minecraft.core.BlockPos;
++import net.minecraft.core.Direction;
  import net.minecraft.core.SectionPos;
  import net.minecraft.core.particles.ParticleTypes;
-@@ -8,6 +9,7 @@ import net.minecraft.server.level.ServerLevel;
- import net.minecraft.server.level.ServerPlayer;
+ import net.minecraft.server.level.ServerLevel;
+@@ -9,6 +10,7 @@ import net.minecraft.server.level.ServerPlayer;
  import net.minecraft.sounds.SoundEvents;
  import net.minecraft.sounds.SoundSource;
-+import net.minecraft.util.Mth;
  import net.minecraft.world.entity.Entity;
++import net.minecraft.world.entity.EntityDimensions;
  import net.minecraft.world.entity.EntityReference;
  import net.minecraft.world.entity.EntitySpawnReason;
-@@ -23,9 +25,11 @@ import net.minecraft.world.level.block.Blocks;
+ import net.minecraft.world.entity.EntityType;
+@@ -23,12 +25,24 @@ import net.minecraft.world.level.block.Blocks;
  import net.minecraft.world.level.block.state.BlockState;
  import net.minecraft.world.level.gamerules.GameRules;
  import net.minecraft.world.level.portal.TeleportTransition;
 +import net.minecraft.world.phys.AABB;
++import net.minecraft.world.phys.BlockHitResult;
  import net.minecraft.world.phys.EntityHitResult;
  import net.minecraft.world.phys.HitResult;
  import net.minecraft.world.phys.Vec3;
++import net.minecraft.world.phys.shapes.Shapes;
 +import org.dreeam.leaf.config.modules.opt.EnderPearlMechanics;
  import org.jspecify.annotations.Nullable;
  
  public class ThrownEnderpearl extends ThrowableItemProjectile {
-@@ -101,16 +105,25 @@ public class ThrownEnderpearl extends ThrowableItemProjectile {
++    private static final double PEARL_FACE_EPSILON = 1.0E-3;
++    private static final double PEARL_FREE_XZ = 0.25;
++    private static final double PEARL_FREE_Y = 0.25;
++    private static final double PEARL_EDGE_RECLASSIFY = 0.22;
++    private static final double PEARL_HORIZONTAL_RECLASSIFY = 0.1;
++    private static final double PEARL_VERTICAL_CLASSIFY = 1.35;
++    private static final double PEARL_SIDE_Y_RANGE = 0.5;
++
+     private long ticketTimer = 0L;
+ 
+     public ThrownEnderpearl(EntityType<? extends ThrownEnderpearl> type, Level level) {
+@@ -101,18 +115,22 @@ public class ThrownEnderpearl extends ThrowableItemProjectile {
          if (this.level() instanceof ServerLevel serverLevel && !this.isRemoved()) {
              Entity owner = this.getOwner();
              if (owner != null && isAllowedToTeleportOwner(owner, serverLevel)) {
@@ -45,13 +58,7 @@ index 2fe748ab39602b1f3d2c4f9982375e582806828c..41a30a36e3905b19f5e9a52a94d6a3ec
 +
                  if (owner instanceof ServerPlayer serverPlayer) {
                      if (serverPlayer.connection.isAcceptingMessages()) {
-+                        final Vec3 target = EnderPearlMechanics.preventGlitch ? findPearlTarget(serverPlayer, serverLevel, hit) : hit;
-+
-+                        if (target == null) {
-+                            discard(EntityRemoveEvent.Cause.HIT);
-+
-+                            return;
-+                        }
++                        final Vec3 target = EnderPearlMechanics.preventGlitch ? resolvePearlTarget(serverPlayer, serverLevel, result) : hit;
 +
                          // Leaf start - SparklyPaper - parallel world ticking - handling for pearl teleportation cross-dimension
                          java.util.function.Consumer<ServerPlayer> teleportPlayerCrossDimensionTask = taskServerPlayer -> {
@@ -63,8 +70,11 @@ index 2fe748ab39602b1f3d2c4f9982375e582806828c..41a30a36e3905b19f5e9a52a94d6a3ec
 +                        ServerPlayer serverPlayer1 = taskServerPlayer.teleport(new TeleportTransition(serverLevel, target, Vec3.ZERO, 0.0F, 0.0F, Relative.union(Relative.ROTATION, Relative.DELTA), TeleportTransition.DO_NOTHING, org.bukkit.event.player.PlayerTeleportEvent.TeleportCause.ENDER_PEARL));
                          if (serverPlayer1 == null) {
                              this.discard(org.bukkit.event.entity.EntityRemoveEvent.Cause.HIT);
++
                              return;
-@@ -142,7 +155,7 @@ public class ThrownEnderpearl extends ThrowableItemProjectile {
+                         }
+                         // CraftBukkit end
+@@ -142,7 +160,7 @@ public class ThrownEnderpearl extends ThrowableItemProjectile {
                              serverPlayer1.hurtServer(taskServerPlayer.level(), this.damageSources().enderPearl().eventEntityDamager(this), this.level().purpurConfig.enderPearlDamage); // CraftBukkit // Paper - fix DamageSource API // Purpur - Configurable Ender Pearl damage
                          }
  
@@ -73,7 +83,7 @@ index 2fe748ab39602b1f3d2c4f9982375e582806828c..41a30a36e3905b19f5e9a52a94d6a3ec
                          };
                          if (org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled) {
                              serverPlayer.getBukkitEntity().taskScheduler.schedule(teleportPlayerCrossDimensionTask, entity -> {
-@@ -154,13 +167,15 @@ public class ThrownEnderpearl extends ThrowableItemProjectile {
+@@ -154,13 +172,15 @@ public class ThrownEnderpearl extends ThrowableItemProjectile {
                      }
                  } else {
                      Entity entity = owner.teleport(
@@ -91,83 +101,401 @@ index 2fe748ab39602b1f3d2c4f9982375e582806828c..41a30a36e3905b19f5e9a52a94d6a3ec
                  }
  
                  this.discard(org.bukkit.event.entity.EntityRemoveEvent.Cause.HIT); // CraftBukkit - add Bukkit remove cause
-@@ -178,6 +193,81 @@ public class ThrownEnderpearl extends ThrowableItemProjectile {
+@@ -178,6 +198,399 @@ public class ThrownEnderpearl extends ThrowableItemProjectile {
          }
      }
  
-+    private @Nullable Vec3 findPearlTarget(final ServerPlayer player, final ServerLevel level, final Vec3 hit) {
-+        final BlockPos pos = BlockPos.containing(hit);
++    private Vec3 resolvePearlTarget(final ServerPlayer player, final ServerLevel level, final HitResult result) {
++        final Vec3 hit = result.getLocation();
 +
-+        Vec3 target = hit;
-+
-+        if (level.getBlockState(pos).is(Blocks.BARRIER) ||
-+            level.getBlockState(pos.above()).is(Blocks.BARRIER)
-+        ) {
-+            target = findBarrierSafe(level, target);
-+
-+            if (target == null) {
-+                return null;
-+            }
++        if (!(result instanceof final BlockHitResult block)) {
++            return hit;
 +        }
 +
-+        final BlockPos result = BlockPos.containing(target);
++        final Direction face = resolveHitFace(level, block);
++        final BlockPos pos = block.getBlockPos();
++        final EntityDimensions dimensions = player.getDimensions(player.getPose());
 +
-+        final Vec3 snapped = new Vec3(
-+            result.getX() + 0.5D,
-+            result.getY(),
-+            result.getZ() + 0.5D
-+        );
-+
-+        return isTargetSafe(player, level, snapped) ? snapped : null;
++        return switch (face) {
++            case UP -> resolveTopHit(player, level, block, pos, dimensions, hit);
++            case DOWN -> resolveBottomHit(player, level, block, pos, dimensions, hit);
++            default -> resolveSideHit(player, level, block, pos, face, dimensions, hit);
++        };
 +    }
 +
-+    private @Nullable Vec3 findBarrierSafe(final ServerLevel level, final Vec3 position) {
-+        final BlockPos containing = BlockPos.containing(position);
++    private Direction resolveHitFace(final ServerLevel level, final BlockHitResult hit) {
++        final Direction face = hit.getDirection();
 +
-+        final int x = containing.getX();
-+        final int z = containing.getZ();
++        if (face != Direction.UP && face != Direction.DOWN) {
++            return face;
++        }
 +
-+        for (int y = containing.getY(); y >= level.getMinY(); y--) {
-+            final BlockPos floorPos = new BlockPos(x, y, z);
-+            final BlockState floorState = level.getBlockState(floorPos);
++        final Vec3 delta = getDeltaMovement();
++        final double horizontal = Math.max(Math.abs(delta.x), Math.abs(delta.z));
++        final double vertical = Math.abs(delta.y);
++        final Direction sideFace = findHorizontalFace(delta);
 +
-+            if (floorState.getCollisionShape(level, floorPos).isEmpty() || floorState.is(Blocks.BARRIER)) {
-+                continue;
-+            }
++        if (horizontal < PEARL_HORIZONTAL_RECLASSIFY ||
++            vertical > horizontal * PEARL_VERTICAL_CLASSIFY ||
++            !isHorizontalEdge(hit) ||
++            !hasHorizontalObstruction(level, hit.getBlockPos(), sideFace)
++        ) {
++            return face;
++        }
 +
-+            return new Vec3(x + 0.5D, y + 1.0D, z + 0.5D);
++        return sideFace;
++    }
++
++    private boolean isHorizontalEdge(final BlockHitResult hit) {
++        final Vec3 location = hit.getLocation();
++        final BlockPos pos = hit.getBlockPos();
++
++        final double x = location.x - pos.getX();
++        final double z = location.z - pos.getZ();
++
++        final double distance = Math.min(
++            Math.min(x, 1.0 - x),
++            Math.min(z, 1.0 - z)
++        );
++
++        return distance <= PEARL_EDGE_RECLASSIFY;
++    }
++
++    private boolean hasHorizontalObstruction(final ServerLevel level, final BlockPos pos, final Direction face) {
++        final BlockPos front = pos.relative(face);
++        final BlockPos head = front.above();
++        final BlockPos upper = head.above();
++
++        return !level.getBlockState(head).getCollisionShape(level, head).isEmpty()
++            || !level.getBlockState(upper).getCollisionShape(level, upper).isEmpty();
++    }
++
++    private Direction findHorizontalFace(final Vec3 delta) {
++        if (Math.abs(delta.x) >= Math.abs(delta.z)) {
++            return delta.x > 0.0 ? Direction.WEST : Direction.EAST;
++        }
++
++        return delta.z > 0.0 ? Direction.NORTH : Direction.SOUTH;
++    }
++
++    private @Nullable Vec3 findFreeTarget(
++        final ServerPlayer player,
++        final ServerLevel level,
++        final EntityDimensions dimensions,
++        final Vec3 candidate
++    ) {
++        final AABB box = dimensions.makeBoundingBox(candidate);
++
++        if (level.noCollision(player, box) && !level.containsAnyLiquid(box)) {
++            return candidate;
++        }
++
++        return level.findFreePosition(player, Shapes.create(box), candidate, PEARL_FREE_XZ, PEARL_FREE_Y, PEARL_FREE_XZ)
++            .filter(target -> {
++                final AABB targetBox = dimensions.makeBoundingBox(target);
++
++                return level.noCollision(player, targetBox) && !level.containsAnyLiquid(targetBox);
++            })
++            .orElse(null);
++    }
++
++    private Vec3 resolveTopHit(
++        final ServerPlayer player,
++        final ServerLevel level,
++        final BlockHitResult result,
++        final BlockPos pos,
++        final EntityDimensions dimensions,
++        final Vec3 hit
++    ) {
++        final int originalX = pos.getX();
++        final int originalZ = pos.getZ();
++
++        final double clampedX = clamp(hit.x, originalX + 0.15, originalX + 0.85);
++        final int blockY = pos.getY();
++        final double clampedY = clamp(hit.z, originalZ + 0.15, originalZ + 0.85);
++
++        final Vec3[] targetCandidates = {
++            new Vec3(clampedX, blockY + 1.0, clampedY),
++            new Vec3(originalX + 0.5, blockY + 1.0, originalZ + 0.5),
++            new Vec3(originalX + 0.25, blockY + 1.0, originalZ + 0.25),
++            new Vec3(originalX + 0.25, blockY + 1.0, originalZ + 0.75),
++            new Vec3(originalX + 0.75, blockY + 1.0, originalZ + 0.25),
++            new Vec3(originalX + 0.75, blockY + 1.0, originalZ + 0.75)
++        };
++
++        final Vec3 resolvedTarget = resolveWithinCell(
++            player, level, dimensions, targetCandidates, pos, blockY + 1.0 - PEARL_FACE_EPSILON, Double.MAX_VALUE
++        );
++
++        if (resolvedTarget != null) {
++            logPearlTarget(result, hit, resolvedTarget, "up-cell");
++
++            return resolvedTarget;
++        }
++
++        final Direction sideDirection = findHorizontalFace(getDeltaMovement());
++        final Vec3 sideTarget = resolveSideHit(player, level, result, pos, sideDirection, dimensions, hit);
++
++        if (sideTarget.distanceToSqr(player.position()) > 0.01) {
++            logPearlTarget(result, hit, sideTarget, "up-side");
++
++            return sideTarget;
++        }
++
++        logPearlTarget(result, hit, new Vec3(originalX + 0.5, blockY + 1.0, originalZ + 0.5), "up-final");
++
++        return new Vec3(originalX + 0.5, blockY + 1.0, originalZ + 0.5);
++    }
++
++    private Vec3 resolveBottomHit(
++        final ServerPlayer player,
++        final ServerLevel level,
++        final BlockHitResult result,
++        final BlockPos pos,
++        final EntityDimensions dimensions,
++        final Vec3 hit
++    ) {
++        final int originalX = pos.getX();
++        final int originalY = pos.getY();
++
++        final float dimensionsHeight = dimensions.height();
++
++        final int originalZ = pos.getZ();
++
++        final double clampedX = clamp(hit.x, originalX + 0.15, originalX + 0.85);
++        final double clampedY = originalY - dimensionsHeight - PEARL_FACE_EPSILON;
++        final double clampedZ = clamp(hit.z, originalZ + 0.15, originalZ + 0.85);
++
++        final Vec3[] targetCandidates = {
++            new Vec3(clampedX, clampedY, clampedZ),
++            new Vec3(originalX + 0.5, clampedY, originalZ + 0.5),
++            new Vec3(originalX + 0.25, clampedY, originalZ + 0.25),
++            new Vec3(originalX + 0.25, clampedY, originalZ + 0.75),
++            new Vec3(originalX + 0.75, clampedY, originalZ + 0.25),
++            new Vec3(originalX + 0.75, clampedY, originalZ + 0.75)
++        };
++
++        final Vec3 resolvedTarget = resolveWithinCell(
++            player,
++            level,
++            dimensions,
++            targetCandidates,
++            pos,
++            Double.NEGATIVE_INFINITY,
++            originalY + PEARL_FACE_EPSILON - dimensionsHeight
++        );
++
++        if (resolvedTarget != null) {
++            logPearlTarget(result, hit, resolvedTarget, "down-cell");
++
++            return resolvedTarget;
++        }
++
++        final Direction sideDirection = findHorizontalFace(getDeltaMovement());
++        final Vec3 sideTarget = resolveSideHit(player, level, result, pos, sideDirection, dimensions, hit);
++
++        if (sideTarget.distanceToSqr(player.position()) > 0.01) {
++            logPearlTarget(result, hit, sideTarget, "down-side");
++
++            return sideTarget;
++        }
++
++        logPearlTarget(result, hit, new Vec3(originalX + 0.5, clampedY, originalZ + 0.5), "down-final");
++
++        return new Vec3(originalX + 0.5, clampedY, originalZ + 0.5);
++    }
++
++    private Vec3 resolveSideHit(
++        final ServerPlayer player,
++        final ServerLevel level,
++        final BlockHitResult result,
++        final BlockPos pos,
++        final Direction face,
++        final EntityDimensions dimensions,
++        final Vec3 hit
++    ) {
++        final BlockPos frontBasePos = pos.relative(face);
++
++        final Direction direction = face.getClockWise();
++        final double y = hit.y;
++
++        final BlockPos faceClockwisePos = frontBasePos.relative(direction);
++        final BlockPos faceCounterPos = frontBasePos.relative(direction.getOpposite());
++
++        final Vec3 front = resolveSideCell(player, level, dimensions, hit, frontBasePos, y, "side-front", result);
++        final BlockPos frontDownPos = frontBasePos.below();
++
++        final BlockPos clockwiseDownPos = faceClockwisePos.below();
++        final BlockPos counterDownPos = faceCounterPos.below();
++
++        if (front != null) {
++            return front;
++        }
++
++        final Vec3 fdown = resolveSideCell(
++            player, level, dimensions, hit, frontDownPos, y - 0.5, "side-front-down", result
++        );
++
++        if (fdown != null) {
++            return fdown;
++        }
++
++        final Vec3 clockwise = resolveSideCell(
++            player, level, dimensions, hit, faceClockwisePos, y, "side-diagonal-cw", result
++        );
++
++        if (clockwise != null) {
++            return clockwise;
++        }
++
++        final Vec3 counter = resolveSideCell(
++            player, level, dimensions, hit, faceCounterPos, y, "side-diagonal-ccw", result
++        );
++
++        if (counter != null) {
++            return counter;
++        }
++
++        final Vec3 cwdown = resolveSideCell(
++            player, level, dimensions, hit, clockwiseDownPos, y - 0.5, "side-diagonal-cw-down", result
++        );
++
++        if (cwdown != null) {
++            return cwdown;
++        }
++
++        final Vec3 ccdown = resolveSideCell(
++            player, level, dimensions, hit, counterDownPos, y - 0.5, "side-diagonal-ccw-down", result
++        );
++
++        if (ccdown != null) {
++            return ccdown;
++        }
++
++        final Vec3 fallback = new Vec3(frontBasePos.getX() + 0.5, y, frontBasePos.getZ() + 0.5);
++
++        logPearlTarget(result, hit, fallback, "side-front-final");
++
++        return fallback;
++    }
++
++    private @Nullable Vec3 resolveSideCell(
++        final ServerPlayer player,
++        final ServerLevel level,
++        final EntityDimensions dimensions,
++        final Vec3 hit,
++        final BlockPos cell,
++        final double y,
++        final String mode,
++        final BlockHitResult result
++    ) {
++        final int originalX = cell.getX();
++        final int originalZ = cell.getZ();
++
++        final double clampedX = clamp(hit.x, originalX + 0.15, originalX + 0.85);
++        final double clampedZ = clamp(hit.z, originalZ + 0.15, originalZ + 0.85);
++
++        final Vec3[] targetCandidates = {
++            new Vec3(clampedX, y, clampedZ),
++            new Vec3(originalX + 0.5, y, originalZ + 0.5),
++            new Vec3(originalX + 0.25, y, originalZ + 0.25),
++            new Vec3(originalX + 0.25, y, originalZ + 0.75),
++            new Vec3(originalX + 0.75, y, originalZ + 0.25),
++            new Vec3(originalX + 0.75, y, originalZ + 0.75),
++            new Vec3(originalX + 0.5, y - 0.125, originalZ + 0.5),
++            new Vec3(originalX + 0.5, y + 0.125, originalZ + 0.5),
++            new Vec3(originalX + 0.25, y - 0.125, originalZ + 0.25),
++            new Vec3(originalX + 0.25, y - 0.125, originalZ + 0.75),
++            new Vec3(originalX + 0.75, y - 0.125, originalZ + 0.25),
++            new Vec3(originalX + 0.75, y - 0.125, originalZ + 0.75),
++            new Vec3(originalX + 0.25, y + 0.125, originalZ + 0.25),
++            new Vec3(originalX + 0.25, y + 0.125, originalZ + 0.75),
++            new Vec3(originalX + 0.75, y + 0.125, originalZ + 0.25),
++            new Vec3(originalX + 0.75, y + 0.125, originalZ + 0.75)
++        };
++
++        final Vec3 resolvedTarget = resolveWithinCell(
++            player,
++            level,
++            dimensions,
++            targetCandidates,
++            cell,
++            y - PEARL_SIDE_Y_RANGE,
++            y + PEARL_SIDE_Y_RANGE
++        );
++
++        if (resolvedTarget != null) {
++            logPearlTarget(result, hit, resolvedTarget, mode);
++
++            return resolvedTarget;
 +        }
 +
 +        return null;
 +    }
 +
-+    private boolean isTargetSafe(final ServerPlayer player, final ServerLevel level, final Vec3 position) {
-+        final AABB boundingBox = player.getDimensions(player.getPose()).makeBoundingBox(position);
++    private @Nullable Vec3 resolveWithinCell(
++        final ServerPlayer player,
++        final ServerLevel level,
++        final EntityDimensions dims,
++        final Vec3[] candidates,
++        final BlockPos cell,
++        final double minY,
++        final double maxY
++    ) {
++        final int cellX = cell.getX();
++        final int cellZ = cell.getZ();
 +
-+        final int minX = Mth.floor(boundingBox.minX);
-+        final int maxX = Mth.floor(boundingBox.maxX);
-+        final int minY = Mth.floor(boundingBox.minY);
-+        final int maxY = Mth.floor(boundingBox.maxY);
-+        final int minZ = Mth.floor(boundingBox.minZ);
-+        final int maxZ = Mth.floor(boundingBox.maxZ);
++        final double minX = cellX + 0.05;
++        final double maxX = cellX + 0.95;
++        final double minZ = cellZ + 0.05;
++        final double maxZ = cellZ + 0.95;
 +
-+        for (int x = minX; x <= maxX; x++) {
-+            for (int y = minY; y <= maxY; y++) {
-+                for (int z = minZ; z <= maxZ; z++) {
-+                    final BlockPos pos = new BlockPos(x, y, z);
++        for (final Vec3 candidate : candidates) {
++            final Vec3 target = this.findFreeTarget(player, level, dims, candidate);
 +
-+                    for (final AABB shape : level.getBlockState(pos).getCollisionShape(level, pos).toAabbs()) {
-+                        if (!shape.move(pos).intersects(boundingBox)) {
-+                            continue;
-+                        }
-+
-+                        return false;
-+                    }
-+                }
++            if (target == null) {
++                continue;
 +            }
++
++            if (target.x < minX || target.x > maxX || target.z < minZ || target.z > maxZ) {
++                continue;
++            }
++
++            if (target.y < minY || target.y > maxY) {
++                continue;
++            }
++
++            return target;
 +        }
 +
-+        return true;
++        return null;
++    }
++
++    private void logPearlTarget(final BlockHitResult hit, final Vec3 original, final Vec3 target, final String mode) {
++        if (!EnderPearlMechanics.logActions) {
++            return;
++        }
++
++        System.out.println(
++            "[pearls]"
++                + " face=" + hit.getDirection()
++                + " block=" + hit.getBlockPos()
++                + " original=" + formatVec3(original)
++                + " target=" + formatVec3(target)
++                + " mode=" + mode
++        );
++    }
++
++    private String formatVec3(final Vec3 vec) {
++        return round(vec.x) + "," + round(vec.y) + "," + round(vec.z);
++    }
++
++    private double round(final double value) {
++        return Math.round(value * 1000.0) / 1000.0;
++    }
++
++    private double clamp(final double value, final double min, final double max) {
++        return Math.max(min, Math.min(max, value));
 +    }
 +
      @Override
