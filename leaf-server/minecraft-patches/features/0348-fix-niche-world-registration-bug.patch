@@ -1,0 +1,31 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Sun, 3 May 2026 23:14:27 +1000
+Subject: [PATCH] fix niche world registration bug
+
+
+diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/MinecraftServer.java
+index 593f69432720f3037cd5de4e01ccf07952019819..c9a10d46693351fa032e9262f65341b10201d824 100644
+--- a/net/minecraft/server/MinecraftServer.java
++++ b/net/minecraft/server/MinecraftServer.java
+@@ -2083,6 +2083,8 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+ 
+     // CraftBukkit start
+     public void addLevel(ServerLevel level) {
++        level.getCraftServer().addWorld(level.getWorld()); // CraftBukkit
++
+         Map<ResourceKey<Level>, ServerLevel> oldLevels = this.levels;
+         Map<ResourceKey<Level>, ServerLevel> newLevels = Maps.newLinkedHashMap(oldLevels);
+         newLevels.put(level.dimension(), level);
+diff --git a/net/minecraft/server/level/ServerLevel.java b/net/minecraft/server/level/ServerLevel.java
+index 5f1e9f165a604e9cf355e3eff83e2db1bbe85e4b..0191756e18d412020bc432b8d8e297794f682e6b 100644
+--- a/net/minecraft/server/level/ServerLevel.java
++++ b/net/minecraft/server/level/ServerLevel.java
+@@ -768,7 +768,6 @@ public class ServerLevel extends Level implements ServerEntityGetter, WorldGenLe
+         this.poiDataController = new ca.spottedleaf.moonrise.patches.chunk_system.io.datacontroller.PoiDataController((ServerLevel)(Object)this, this.chunkTaskScheduler);
+         this.chunkDataController = new ca.spottedleaf.moonrise.patches.chunk_system.io.datacontroller.ChunkDataController((ServerLevel)(Object)this, this.chunkTaskScheduler);
+         // Paper end - rewrite chunk system
+-        this.getCraftServer().addWorld(this.getWorld()); // CraftBukkit
+         this.preciseTime = this.serverLevelData.getDayTime(); // Purpur - Configurable daylight cycle
+         // Leaf start - SparklyPaper - parallel world ticking
+         if (org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled) {
