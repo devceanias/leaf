@@ -5,14 +5,56 @@ Subject: [PATCH] fix niche world registration bug
 
 
 diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/MinecraftServer.java
-index 593f69432720f3037cd5de4e01ccf07952019819..c9a10d46693351fa032e9262f65341b10201d824 100644
+index 593f69432720f3037cd5de4e01ccf07952019819..0ec30a26787ed8aef69cdf2f563672455928a2ee 100644
 --- a/net/minecraft/server/MinecraftServer.java
 +++ b/net/minecraft/server/MinecraftServer.java
-@@ -2083,6 +2083,8 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+@@ -37,13 +37,14 @@ import java.util.UUID;
+ import java.util.Map.Entry;
+ import java.util.concurrent.CompletableFuture;
+ import java.util.concurrent.Executor;
+-import java.util.concurrent.RejectedExecutionException;
+ import java.util.concurrent.atomic.AtomicReference;
+ import java.util.concurrent.locks.LockSupport;
+ import java.util.function.BooleanSupplier;
+ import java.util.function.Consumer;
+ import java.util.function.Function;
+ import java.util.stream.Collectors;
++import org.bukkit.craftbukkit.CraftServer;
++import org.bukkit.craftbukkit.CraftWorld;
+ import net.minecraft.CrashReport;
+ import net.minecraft.CrashReportCategory;
+ import net.minecraft.ReportType;
+@@ -136,7 +137,6 @@ import net.minecraft.util.profiling.metrics.profiling.ServerMetricsSamplersProvi
+ import net.minecraft.util.profiling.metrics.storage.MetricsPersister;
+ import net.minecraft.util.thread.ReentrantBlockableEventLoop;
+ import net.minecraft.world.Difficulty;
+-import net.minecraft.world.RandomSequences;
+ import net.minecraft.world.Stopwatches;
+ import net.minecraft.world.entity.ai.village.VillageSiege;
+ import net.minecraft.world.entity.npc.CatSpawner;
+@@ -171,7 +171,6 @@ import net.minecraft.world.level.levelgen.PhantomSpawner;
+ import net.minecraft.world.level.levelgen.WorldOptions;
+ import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplateManager;
+ import net.minecraft.world.level.storage.CommandStorage;
+-import net.minecraft.world.level.storage.DerivedLevelData;
+ import net.minecraft.world.level.storage.DimensionDataStorage;
+ import net.minecraft.world.level.storage.LevelData;
+ import net.minecraft.world.level.storage.LevelResource;
+@@ -2083,6 +2082,18 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
  
      // CraftBukkit start
      public void addLevel(ServerLevel level) {
-+        level.getCraftServer().addWorld(level.getWorld()); // CraftBukkit
++        final CraftWorld world = level.getWorld();
++        final CraftServer server = level.getCraftServer();
++        final String name = world.getName();
++
++        if (server.getWorld(name) == null) {
++            if (server.getWorld(world.getUID()) != null) {
++                throw new IllegalArgumentException("World " + name + " has a duplicate UID.");
++            }
++
++            server.addWorld(world); // CraftBukkit
++        }
 +
          Map<ResourceKey<Level>, ServerLevel> oldLevels = this.levels;
          Map<ResourceKey<Level>, ServerLevel> newLevels = Maps.newLinkedHashMap(oldLevels);

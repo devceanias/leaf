@@ -1,0 +1,97 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Mon, 4 May 2026 17:49:52 +1000
+Subject: [PATCH] remove level constructor register requirement
+
+
+diff --git a/src/main/java/org/bukkit/craftbukkit/CraftServer.java b/src/main/java/org/bukkit/craftbukkit/CraftServer.java
+index d0f8f254bc7ea4ca5be79e30a94949c38e68cf60..216aa27a8f5d6987a05d74150c06dd6b40125a65 100644
+--- a/src/main/java/org/bukkit/craftbukkit/CraftServer.java
++++ b/src/main/java/org/bukkit/craftbukkit/CraftServer.java
+@@ -418,7 +418,7 @@ public final class CraftServer implements Server {
+         this.pluginManager = new SimplePluginManager(this, commandMap);
+         this.paperPluginManager = new io.papermc.paper.plugin.manager.PaperPluginManagerImpl(this, this.commandMap, pluginManager);
+         this.pluginManager.paperPluginManager = this.paperPluginManager;
+-         // Paper end
++        // Paper end
+         // Purpur start - Language API
+         org.purpurmc.purpur.language.Language.setLanguage(new org.purpurmc.purpur.language.Language() {
+             private net.minecraft.locale.Language language = net.minecraft.locale.Language.getInstance();
+@@ -549,10 +549,10 @@ public final class CraftServer implements Server {
+         }
+ 
+         this.activeCompatibilities = compatibilities
+-                .getKeys(false)
+-                .stream()
+-                .filter(compatibilities::getBoolean)
+-                .collect(Collectors.toSet());
++            .getKeys(false)
++            .stream()
++            .filter(compatibilities::getBoolean)
++            .collect(Collectors.toSet());
+ 
+         if (!this.activeCompatibilities.isEmpty()) {
+             this.logger.info("Using following compatibilities: `" + Joiner.on("`, `").join(this.activeCompatibilities) + "`, this will affect performance and other plugins behavior.");
+@@ -648,7 +648,7 @@ public final class CraftServer implements Server {
+                     permsToLoad.add(perm);
+                 } else {
+                     this.getLogger().log(Level.WARNING, "Plugin " + plugin.getDescription().getFullName() + " tried to register permission '" + perm.getName() + "' but it's already registered");
+-                // Paper end
++                    // Paper end
+                 }
+             }
+             this.paperPluginManager.addPermissions(permsToLoad); // Paper
+@@ -1333,7 +1333,7 @@ public final class CraftServer implements Server {
+             chunkGenerator, biomeProvider
+         );
+ 
+-        if (!(this.worlds.containsKey(name.toLowerCase(Locale.ROOT)))) {
++        if (getWorld(serverLevel.getWorld().getUID()) != null) {
+             return null;
+         }
+ 
+@@ -2165,13 +2165,13 @@ public final class CraftServer implements Server {
+     @Override
+     public <B extends BanList<E>, E> B getBanList(final io.papermc.paper.ban.BanListType<B> type) {
+         Preconditions.checkArgument(type != null, "BanList.BanType cannot be null");
+-       if (type == io.papermc.paper.ban.BanListType.IP) {
+-           return (B) new CraftIpBanList(this.playerList.getIpBans());
+-       } else if (type == io.papermc.paper.ban.BanListType.PROFILE) {
+-          return (B) new CraftProfileBanList(this.playerList.getBans());
+-       } else {
+-           throw new IllegalArgumentException("Unknown BanListType: " + type);
+-       }
++        if (type == io.papermc.paper.ban.BanListType.IP) {
++            return (B) new CraftIpBanList(this.playerList.getIpBans());
++        } else if (type == io.papermc.paper.ban.BanListType.PROFILE) {
++            return (B) new CraftProfileBanList(this.playerList.getBans());
++        } else {
++            throw new IllegalArgumentException("Unknown BanListType: " + type);
++        }
+     }
+ 
+     @Override
+@@ -2737,9 +2737,9 @@ public final class CraftServer implements Server {
+ 
+         ReloadableServerRegistries.Holder registry = this.getServer().reloadableRegistries();
+         return registry.lookup().lookup(Registries.LOOT_TABLE)
+-                .flatMap((lookup) -> lookup.get(CraftLootTable.bukkitKeyToMinecraft(key)))
+-                .map((holder) -> new CraftLootTable(key, holder.value()))
+-                .orElse(null);
++            .flatMap((lookup) -> lookup.get(CraftLootTable.bukkitKeyToMinecraft(key)))
++            .map((holder) -> new CraftLootTable(key, holder.value()))
++            .orElse(null);
+     }
+ 
+     @Override
+@@ -2998,8 +2998,8 @@ public final class CraftServer implements Server {
+     @Override
+     public boolean reloadCommandAliases() {
+         Set<String> removals = getCommandAliases().keySet().stream()
+-                .map(key -> key.toLowerCase(java.util.Locale.ENGLISH))
+-                .collect(java.util.stream.Collectors.toSet());
++            .map(key -> key.toLowerCase(java.util.Locale.ENGLISH))
++            .collect(java.util.stream.Collectors.toSet());
+         getCommandMap().getKnownCommands().keySet().removeIf(removals::contains);
+         File file = getCommandsConfigFile();
+         try {
