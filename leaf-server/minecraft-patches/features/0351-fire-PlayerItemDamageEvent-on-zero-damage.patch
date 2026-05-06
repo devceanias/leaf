@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Wed, 6 May 2026 14:18:27 +1000
+Subject: [PATCH] fire PlayerItemDamageEvent on zero damage
+
+
+diff --git a/net/minecraft/world/item/ItemStack.java b/net/minecraft/world/item/ItemStack.java
+index f276bb5a02e64b352cc319cfe54289b87e99c9b8..94a3756e1630c744c9ab2fc65e094ec2e8796356 100644
+--- a/net/minecraft/world/item/ItemStack.java
++++ b/net/minecraft/world/item/ItemStack.java
+@@ -99,6 +99,7 @@ import net.minecraft.world.level.block.state.pattern.BlockInWorld;
+ import net.minecraft.world.level.gameevent.GameEvent;
+ import org.apache.commons.lang3.function.TriConsumer;
+ import org.apache.commons.lang3.mutable.MutableBoolean;
++import org.dreeam.leaf.config.modules.gameplay.ItemDamageEvent;
+ import org.jspecify.annotations.Nullable;
+ import org.slf4j.Logger;
+ 
+@@ -676,7 +677,7 @@ public final class ItemStack implements DataComponentHolder, net.caffeinemc.mods
+         final int originalDamage = damage; // Paper - Expand PlayerItemDamageEvent
+         int i = this.processDurabilityChange(damage, level, player, force); // Paper
+         // CraftBukkit start
+-        if (i > 0 && player instanceof final ServerPlayer serverPlayer) { // Paper - Add EntityDamageItemEvent - limit to positive damage and run for player
++        if ((i > 0 || ItemDamageEvent.fireOnZeroDamage) && player instanceof final ServerPlayer serverPlayer) { // Paper - Add EntityDamageItemEvent - limit to positive damage and run for player
+             org.bukkit.event.player.PlayerItemDamageEvent event = new org.bukkit.event.player.PlayerItemDamageEvent(serverPlayer.getBukkitEntity(), org.bukkit.craftbukkit.inventory.CraftItemStack.asCraftMirror(this), i, originalDamage); // Paper - Add EntityDamageItemEvent
+             event.getPlayer().getServer().getPluginManager().callEvent(event);
+             if (event.isCancelled()) {
+@@ -750,14 +751,14 @@ public final class ItemStack implements DataComponentHolder, net.caffeinemc.mods
+             int min = Math.min(this.getDamageValue() + i, this.getMaxDamage() - 1); // Paper - Expand PlayerItemDamageEvent - diff on change as min computation is copied post event.
+ 
+             // Paper start - Expand PlayerItemDamageEvent
+-            if (min - this.getDamageValue() > 0) {
++            if (min - this.getDamageValue() > 0 || ItemDamageEvent.fireOnZeroDamage) {
+                 org.bukkit.event.player.PlayerItemDamageEvent event = new org.bukkit.event.player.PlayerItemDamageEvent(
+                     serverPlayer.getBukkitEntity(),
+                     org.bukkit.craftbukkit.inventory.CraftItemStack.asCraftMirror(this),
+                     min - this.getDamageValue(),
+                     damage
+                 );
+-                if (!event.callEvent() || event.getDamage() == 0) {
++                if (!event.callEvent() || (event.getDamage() == 0 && !ItemDamageEvent.fireOnZeroDamage)) {
+                     return;
+                 }
+ 
