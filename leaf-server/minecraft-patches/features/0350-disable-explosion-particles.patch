@@ -5,14 +5,14 @@ Subject: [PATCH] disable explosion particles
 
 
 diff --git a/net/minecraft/server/level/ServerLevel.java b/net/minecraft/server/level/ServerLevel.java
-index 0191756e18d412020bc432b8d8e297794f682e6b..058dee79e7e89876ad764bad004447519dee93b5 100644
+index 0191756e18d412020bc432b8d8e297794f682e6b..09aefad4469b64153da25e3f3a1ad64f7f81ed30 100644
 --- a/net/minecraft/server/level/ServerLevel.java
 +++ b/net/minecraft/server/level/ServerLevel.java
 @@ -40,8 +40,10 @@ import net.minecraft.core.Direction;
  import net.minecraft.core.Holder;
  import net.minecraft.core.HolderSet;
  import net.minecraft.core.SectionPos;
-+import net.minecraft.core.particles.BlockParticleOption;
++import net.minecraft.core.particles.ColorParticleOption;
  import net.minecraft.core.particles.ExplosionParticleInfo;
  import net.minecraft.core.particles.ParticleOptions;
 +import net.minecraft.core.particles.ParticleTypes;
@@ -34,7 +34,7 @@ index 0191756e18d412020bc432b8d8e297794f682e6b..058dee79e7e89876ad764bad00444751
 +        WeightedList<ExplosionParticleInfo> sentParticles = blockParticles;
 +
 +        if (DisableExplosionParticles.enabled) {
-+            particleOptions = new BlockParticleOption(ParticleTypes.BLOCK_MARKER, Blocks.AIR.defaultBlockState());
++            particleOptions = ColorParticleOption.create(ParticleTypes.ENTITY_EFFECT, 0x00000000);
 +            sentParticles = WeightedList.of();
 +        }
  
