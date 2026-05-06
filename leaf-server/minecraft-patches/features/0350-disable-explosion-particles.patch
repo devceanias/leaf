@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Wed, 6 May 2026 13:03:47 +1000
+Subject: [PATCH] disable explosion particles
+
+
+diff --git a/net/minecraft/server/level/ServerLevel.java b/net/minecraft/server/level/ServerLevel.java
+index 0191756e18d412020bc432b8d8e297794f682e6b..058dee79e7e89876ad764bad004447519dee93b5 100644
+--- a/net/minecraft/server/level/ServerLevel.java
++++ b/net/minecraft/server/level/ServerLevel.java
+@@ -40,8 +40,10 @@ import net.minecraft.core.Direction;
+ import net.minecraft.core.Holder;
+ import net.minecraft.core.HolderSet;
+ import net.minecraft.core.SectionPos;
++import net.minecraft.core.particles.BlockParticleOption;
+ import net.minecraft.core.particles.ExplosionParticleInfo;
+ import net.minecraft.core.particles.ParticleOptions;
++import net.minecraft.core.particles.ParticleTypes;
+ import net.minecraft.core.registries.BuiltInRegistries;
+ import net.minecraft.core.registries.Registries;
+ import net.minecraft.network.chat.Component;
+@@ -171,6 +173,7 @@ import net.minecraft.world.phys.shapes.Shapes;
+ import net.minecraft.world.phys.shapes.VoxelShape;
+ import net.minecraft.world.ticks.LevelTicks;
+ import net.minecraft.world.waypoints.WaypointTransmitter;
++import org.dreeam.leaf.config.modules.gameplay.DisableExplosionParticles;
+ import org.dreeam.leaf.config.modules.opt.DisableWorldSimulation;
+ import org.jspecify.annotations.Nullable;
+ import org.slf4j.Logger;
+@@ -2296,11 +2299,25 @@ public class ServerLevel extends Level implements ServerEntityGetter, WorldGenLe
+         }
+         // CraftBukkit end
+         ParticleOptions particleOptions = serverExplosion.isSmall() ? smallExplosionParticles : largeExplosionParticles;
++        WeightedList<ExplosionParticleInfo> sentParticles = blockParticles;
++
++        if (DisableExplosionParticles.enabled) {
++            particleOptions = new BlockParticleOption(ParticleTypes.BLOCK_MARKER, Blocks.AIR.defaultBlockState());
++            sentParticles = WeightedList.of();
++        }
+ 
+         for (ServerPlayer serverPlayer : this.players) {
+             if (serverPlayer.distanceToSqr(vec3) < 4096.0) {
+                 Optional<Vec3> optional = Optional.ofNullable(serverExplosion.getHitPlayers().get(serverPlayer));
+-                serverPlayer.connection.send(new ClientboundExplodePacket(vec3, radius, i, optional, particleOptions, explosionSound, blockParticles));
++                serverPlayer.connection.send(new ClientboundExplodePacket(
++                    vec3,
++                    radius,
++                    i,
++                    optional,
++                    particleOptions,
++                    explosionSound,
++                    sentParticles
++                ));
+             }
+         }
+ 
