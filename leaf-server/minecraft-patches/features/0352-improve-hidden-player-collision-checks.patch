@@ -1,0 +1,186 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Sat, 9 May 2026 16:46:27 +1000
+Subject: [PATCH] improve hidden player collision checks
+
+
+diff --git a/net/minecraft/world/item/ArmorStandItem.java b/net/minecraft/world/item/ArmorStandItem.java
+index 89d4bc00898fd8f6d40cda87c04c5983e2ea223c..c505151f120831fbb7b27e5689ae65fab55a3339 100644
+--- a/net/minecraft/world/item/ArmorStandItem.java
++++ b/net/minecraft/world/item/ArmorStandItem.java
+@@ -11,12 +11,14 @@ import net.minecraft.world.InteractionResult;
+ import net.minecraft.world.entity.EntitySpawnReason;
+ import net.minecraft.world.entity.EntityType;
+ import net.minecraft.world.entity.decoration.ArmorStand;
++import net.minecraft.world.entity.player.Player;
+ import net.minecraft.world.item.context.BlockPlaceContext;
+ import net.minecraft.world.item.context.UseOnContext;
+ import net.minecraft.world.level.Level;
+ import net.minecraft.world.level.gameevent.GameEvent;
+ import net.minecraft.world.phys.AABB;
+ import net.minecraft.world.phys.Vec3;
++import org.dreeam.leaf.util.VisibilityCollisions;
+ 
+ public class ArmorStandItem extends Item {
+     public ArmorStandItem(Item.Properties properties) {
+@@ -35,7 +37,19 @@ public class ArmorStandItem extends Item {
+             ItemStack itemInHand = context.getItemInHand();
+             Vec3 vec3 = Vec3.atBottomCenterOf(clickedPos);
+             AABB aabb = EntityType.ARMOR_STAND.getDimensions().makeBoundingBox(vec3.x(), vec3.y(), vec3.z());
+-            if (level.noCollision(null, aabb) && level.getEntities(null, aabb).isEmpty()) {
++
++            final Player player = context.getPlayer();
++            final boolean placeable;
++
++            if (player == null) {
++                placeable = level.noCollision(null, aabb) && level.getEntities(null, aabb).isEmpty();
++            } else {
++                placeable =
++                    VisibilityCollisions.noEntityCollisionForActor(level, player, null, aabb) &&
++                    VisibilityCollisions.noEntityConflictForActor(level, player, aabb);
++            }
++
++            if (placeable) {
+                 if (level instanceof ServerLevel serverLevel) {
+                     Consumer<ArmorStand> consumer = EntityType.createDefaultStackConfig(serverLevel, itemInHand, context.getPlayer());
+                     ArmorStand armorStand = EntityType.ARMOR_STAND.create(serverLevel, consumer, clickedPos, EntitySpawnReason.SPAWN_ITEM_USE, true, true);
+diff --git a/net/minecraft/world/item/BoatItem.java b/net/minecraft/world/item/BoatItem.java
+index 2219d5e3e3d1aaa9f729205191a1f549ed662e2e..5d4e6146c3bbee3be54e6677bfa5b1dc53740485 100644
+--- a/net/minecraft/world/item/BoatItem.java
++++ b/net/minecraft/world/item/BoatItem.java
+@@ -17,6 +17,7 @@ import net.minecraft.world.level.gameevent.GameEvent;
+ import net.minecraft.world.phys.AABB;
+ import net.minecraft.world.phys.HitResult;
+ import net.minecraft.world.phys.Vec3;
++import org.dreeam.leaf.util.VisibilityCollisions;
+ import org.jspecify.annotations.Nullable;
+ 
+ public class BoatItem extends Item {
+@@ -37,7 +38,7 @@ public class BoatItem extends Item {
+             Vec3 viewVector = player.getViewVector(1.0F);
+             double d = 5.0;
+             List<Entity> entities = level.getEntities(
+-                player, player.getBoundingBox().expandTowards(viewVector.scale(5.0)).inflate(1.0), EntitySelector.CAN_BE_PICKED
++                player, player.getBoundingBox().expandTowards(viewVector.scale(5.0)).inflate(1.0), VisibilityCollisions.visibleToActor(player, EntitySelector.CAN_BE_PICKED)
+             );
+             if (!entities.isEmpty()) {
+                 Vec3 eyePosition = player.getEyePosition();
+@@ -64,7 +65,7 @@ public class BoatItem extends Item {
+                 } else {
+                     boat.setYRot(player.getYRot());
+                     if (!level.purpurConfig.persistentDroppableEntityDisplayNames) boat.setCustomName(null); // Purpur - Apply display names from item forms of entities to entities and vice versa
+-                    if (!level.noCollision(boat, boat.getBoundingBox())) {
++                    if (!VisibilityCollisions.noEntityCollisionForActor(level, player, boat, boat.getBoundingBox())) {
+                         return InteractionResult.FAIL;
+                     } else {
+                         if (!level.isClientSide()) {
+diff --git a/net/minecraft/world/item/EndCrystalItem.java b/net/minecraft/world/item/EndCrystalItem.java
+index 0db35674726e3039f2c20aed1993d6d3843f8d29..7e38b226e860c33e0e4fb3b4057d2b53891b2af6 100644
+--- a/net/minecraft/world/item/EndCrystalItem.java
++++ b/net/minecraft/world/item/EndCrystalItem.java
+@@ -5,6 +5,7 @@ import net.minecraft.core.BlockPos;
+ import net.minecraft.server.level.ServerLevel;
+ import net.minecraft.world.InteractionResult;
+ import net.minecraft.world.entity.Entity;
++import net.minecraft.world.entity.player.Player;
+ import net.minecraft.world.entity.boss.enderdragon.EndCrystal;
+ import net.minecraft.world.item.context.UseOnContext;
+ import net.minecraft.world.level.Level;
+@@ -13,6 +14,7 @@ import net.minecraft.world.level.block.state.BlockState;
+ import net.minecraft.world.level.dimension.end.EndDragonFight;
+ import net.minecraft.world.level.gameevent.GameEvent;
+ import net.minecraft.world.phys.AABB;
++import org.dreeam.leaf.util.VisibilityCollisions;
+ 
+ public class EndCrystalItem extends Item {
+     public EndCrystalItem(Item.Properties properties) {
+@@ -34,7 +36,13 @@ public class EndCrystalItem extends Item {
+                 double d = blockPos.getX();
+                 double d1 = blockPos.getY();
+                 double d2 = blockPos.getZ();
+-                List<Entity> entities = level.getEntities(null, new AABB(d, d1, d2, d + 1.0, d1 + 2.0, d2 + 1.0));
++
++                final Player player = context.getPlayer();
++
++                final List<Entity> entities = player == null
++                    ? level.getEntities(null, new AABB(d, d1, d2, d + 1.0, d1 + 2.0, d2 + 1.0))
++                    : level.getEntitiesOfClass(Entity.class, new AABB(d, d1, d2, d + 1.0, d1 + 2.0, d2 + 1.0), VisibilityCollisions.visibleToActor(player));
++
+                 if (!entities.isEmpty()) {
+                     return InteractionResult.FAIL;
+                 } else {
+diff --git a/net/minecraft/world/level/Level.java b/net/minecraft/world/level/Level.java
+index 0fbe7951dbb617e94f643a1033b84ed7d3d1db9e..e6b54a9d1166670ffd5b1c095bcb9cb8ffbbaa11 100644
+--- a/net/minecraft/world/level/Level.java
++++ b/net/minecraft/world/level/Level.java
+@@ -83,6 +83,7 @@ import net.minecraft.world.phys.Vec3;
+ import net.minecraft.world.phys.shapes.VoxelShape;
+ import net.minecraft.world.scores.Scoreboard;
+ import org.apache.commons.lang3.mutable.MutableBoolean;
++import org.dreeam.leaf.util.VisibilityCollisions;
+ import org.jspecify.annotations.Nullable;
+ 
+ // CraftBukkit start
+@@ -955,8 +956,7 @@ public abstract class Level implements LevelAccessor, AutoCloseable, ca.spottedl
+             }
+             // Leaf end - Reduce canSee work - move up
+ 
+-            if (checkCanSee && source instanceof net.minecraft.server.level.ServerPlayer && entity instanceof net.minecraft.server.level.ServerPlayer
+-                && !((net.minecraft.server.level.ServerPlayer) source).getBukkitEntity().canSee(((net.minecraft.server.level.ServerPlayer) entity).getBukkitEntity())) {
++            if (checkCanSee && VisibilityCollisions.hiddenFromActor(source, entity)) {
+                 continue;
+             }
+ 
+diff --git a/net/minecraft/world/level/block/ShulkerBoxBlock.java b/net/minecraft/world/level/block/ShulkerBoxBlock.java
+index 5cd93a95091deb045b24c23d75a35a85f8339d53..e68d45de9c10fb26c4c46b579255bc3219087ed3 100644
+--- a/net/minecraft/world/level/block/ShulkerBoxBlock.java
++++ b/net/minecraft/world/level/block/ShulkerBoxBlock.java
+@@ -37,6 +37,7 @@ import net.minecraft.world.phys.BlockHitResult;
+ import net.minecraft.world.phys.shapes.CollisionContext;
+ import net.minecraft.world.phys.shapes.Shapes;
+ import net.minecraft.world.phys.shapes.VoxelShape;
++import org.dreeam.leaf.util.VisibilityCollisions;
+ import org.jspecify.annotations.Nullable;
+ 
+ public class ShulkerBoxBlock extends BaseEntityBlock {
+@@ -76,7 +77,7 @@ public class ShulkerBoxBlock extends BaseEntityBlock {
+     protected InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos, Player player, BlockHitResult hitResult) {
+         if (level instanceof ServerLevel serverLevel
+             && level.getBlockEntity(pos) instanceof ShulkerBoxBlockEntity shulkerBoxBlockEntity
+-            && canOpen(state, level, pos, shulkerBoxBlockEntity) // Paper - Fix InventoryOpenEvent cancellation - expand if for belows check
++            && canOpen(state, level, pos, shulkerBoxBlockEntity, player) // Paper - Fix InventoryOpenEvent cancellation - expand if for belows check
+             && player.openMenu(shulkerBoxBlockEntity).isPresent()) { // Paper - Fix InventoryOpenEvent cancellation
+             player.awardStat(Stats.OPEN_SHULKER_BOX);
+             PiglinAi.angerNearbyPiglins(serverLevel, player, true);
+@@ -86,12 +87,27 @@ public class ShulkerBoxBlock extends BaseEntityBlock {
+     }
+ 
+     public static boolean canOpen(BlockState state, Level level, BlockPos pos, ShulkerBoxBlockEntity blockEntity) {
+-        if (blockEntity.getAnimationStatus() != ShulkerBoxBlockEntity.AnimationStatus.CLOSED) {
++        return canOpen(state, level, pos, blockEntity, null);
++    }
++
++    public static boolean canOpen(
++        final BlockState state,
++        final Level level,
++        final BlockPos pos,
++        final ShulkerBoxBlockEntity entity,
++        final @Nullable Player player
++    ) {
++        if (entity.getAnimationStatus() != ShulkerBoxBlockEntity.AnimationStatus.CLOSED) {
+             return true;
+-        } else {
+-            AABB aabb = Shulker.getProgressDeltaAabb(1.0F, state.getValue(FACING), 0.0F, 0.5F, pos.getBottomCenter()).deflate(1.0E-6);
+-            return level.noCollision(aabb);
+         }
++
++        final AABB aabb = Shulker
++            .getProgressDeltaAabb(1.0F, state.getValue(FACING), 0.0F, 0.5F, pos.getBottomCenter())
++            .deflate(1.0E-6);
++
++        return player == null
++            ? level.noCollision(aabb)
++            : VisibilityCollisions.noEntityCollisionForActor(level, player, null, aabb);
+     }
+ 
+     @Override
