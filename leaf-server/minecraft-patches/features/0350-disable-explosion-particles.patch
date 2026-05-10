@@ -5,7 +5,7 @@ Subject: [PATCH] disable explosion particles
 
 
 diff --git a/net/minecraft/server/level/ServerLevel.java b/net/minecraft/server/level/ServerLevel.java
-index 0191756e18d412020bc432b8d8e297794f682e6b..09aefad4469b64153da25e3f3a1ad64f7f81ed30 100644
+index 403664a08989dc1aa20fe613909d4cb0bb28cee2..2df1d9448c88dfe5b4478deee5b00d25508fa085 100644
 --- a/net/minecraft/server/level/ServerLevel.java
 +++ b/net/minecraft/server/level/ServerLevel.java
 @@ -40,8 +40,10 @@ import net.minecraft.core.Direction;
@@ -27,7 +27,7 @@ index 0191756e18d412020bc432b8d8e297794f682e6b..09aefad4469b64153da25e3f3a1ad64f
  import org.dreeam.leaf.config.modules.opt.DisableWorldSimulation;
  import org.jspecify.annotations.Nullable;
  import org.slf4j.Logger;
-@@ -2296,11 +2299,25 @@ public class ServerLevel extends Level implements ServerEntityGetter, WorldGenLe
+@@ -2298,11 +2301,25 @@ public class ServerLevel extends Level implements ServerEntityGetter, WorldGenLe
          }
          // CraftBukkit end
          ParticleOptions particleOptions = serverExplosion.isSmall() ? smallExplosionParticles : largeExplosionParticles;

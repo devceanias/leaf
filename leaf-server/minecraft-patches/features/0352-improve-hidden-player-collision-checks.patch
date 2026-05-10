@@ -110,10 +110,10 @@ index 0db35674726e3039f2c20aed1993d6d3843f8d29..7e38b226e860c33e0e4fb3b4057d2b53
                      return InteractionResult.FAIL;
                  } else {
 diff --git a/net/minecraft/world/level/Level.java b/net/minecraft/world/level/Level.java
-index 0fbe7951dbb617e94f643a1033b84ed7d3d1db9e..e6b54a9d1166670ffd5b1c095bcb9cb8ffbbaa11 100644
+index 2bb74d0ecb71ca9c8000972c5a3cccb6fde058ed..3c4b474bb152f9e08eb6ab1f142f8d789ecb19f5 100644
 --- a/net/minecraft/world/level/Level.java
 +++ b/net/minecraft/world/level/Level.java
-@@ -83,6 +83,7 @@ import net.minecraft.world.phys.Vec3;
+@@ -84,6 +84,7 @@ import net.minecraft.world.phys.Vec3;
  import net.minecraft.world.phys.shapes.VoxelShape;
  import net.minecraft.world.scores.Scoreboard;
  import org.apache.commons.lang3.mutable.MutableBoolean;
@@ -121,7 +121,7 @@ index 0fbe7951dbb617e94f643a1033b84ed7d3d1db9e..e6b54a9d1166670ffd5b1c095bcb9cb8
  import org.jspecify.annotations.Nullable;
  
  // CraftBukkit start
-@@ -955,8 +956,7 @@ public abstract class Level implements LevelAccessor, AutoCloseable, ca.spottedl
+@@ -956,8 +957,7 @@ public abstract class Level implements LevelAccessor, AutoCloseable, ca.spottedl
              }
              // Leaf end - Reduce canSee work - move up
  

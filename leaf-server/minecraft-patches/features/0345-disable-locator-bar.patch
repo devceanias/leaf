@@ -20,10 +20,10 @@ index 44b5328b020e451ac27c1fd880a4165a44cce904..593f69432720f3037cd5de4e01ccf079
                  } else {
                      waypointManager.breakAllConnections();
 diff --git a/net/minecraft/server/level/ServerChunkCache.java b/net/minecraft/server/level/ServerChunkCache.java
-index c8d72d1759c403abb27981a7d79d3681d77b09c0..35e930089554945e115d4d7392e5a2e308c6fcfe 100644
+index f15d527d39af9a0852c889dd06bff8459cc938a3..dc23fb7d1fc250425ff7cb08188318c80c60f4d5 100644
 --- a/net/minecraft/server/level/ServerChunkCache.java
 +++ b/net/minecraft/server/level/ServerChunkCache.java
-@@ -819,8 +819,8 @@ public class ServerChunkCache extends ChunkSource implements ca.spottedleaf.moon
+@@ -824,8 +824,8 @@ public class ServerChunkCache extends ChunkSource implements ca.spottedleaf.moon
      public void move(ServerPlayer player) {
          if (!player.isRemoved()) {
              this.chunkMap.move(player);
@@ -35,10 +35,10 @@ index c8d72d1759c403abb27981a7d79d3681d77b09c0..35e930089554945e115d4d7392e5a2e3
          }
      }
 diff --git a/net/minecraft/server/level/ServerLevel.java b/net/minecraft/server/level/ServerLevel.java
-index ad3714c0c27f7db0a5248ce3a445e50f68e700d9..464eb029cbcc5c6cd68fb293203a171871e24d53 100644
+index 0884d916c19a6aa5e362abcb49c08e48ba2aba43..098b03bf088a9e214fd65322225f777c12985fb8 100644
 --- a/net/minecraft/server/level/ServerLevel.java
 +++ b/net/minecraft/server/level/ServerLevel.java
-@@ -3137,7 +3137,10 @@ public class ServerLevel extends Level implements ServerEntityGetter, WorldGenLe
+@@ -3139,7 +3139,10 @@ public class ServerLevel extends Level implements ServerEntityGetter, WorldGenLe
      final class EntityCallbacks implements LevelCallback<Entity> {
          @Override
          public void onCreated(Entity entity) {
@@ -50,7 +50,7 @@ index ad3714c0c27f7db0a5248ce3a445e50f68e700d9..464eb029cbcc5c6cd68fb293203a1718
                  ServerLevel.this.getWaypointManager().trackWaypoint(waypointTransmitter);
              }
              entity.setOldPosAndRot(); // Paper - update old pos / rot for new entities as it will default to Vec3.ZERO
-@@ -3174,20 +3177,24 @@ public class ServerLevel extends Level implements ServerEntityGetter, WorldGenLe
+@@ -3176,20 +3179,24 @@ public class ServerLevel extends Level implements ServerEntityGetter, WorldGenLe
              // ServerLevel.this.getChunkSource().addEntity(entity); // Paper - ignore and warn about illegal addEntity calls instead of crashing server; moved down below valid=true
              if (entity instanceof ServerPlayer serverPlayer) {
                  ServerLevel.this.players.add(serverPlayer);
@@ -77,7 +77,7 @@ index ad3714c0c27f7db0a5248ce3a445e50f68e700d9..464eb029cbcc5c6cd68fb293203a1718
                      Util.logAndPauseIfInIde(
                          "onTrackingStart called during navigation iteration", new IllegalStateException("onTrackingStart called during navigation iteration")
                      );
-@@ -3203,8 +3210,10 @@ public class ServerLevel extends Level implements ServerEntityGetter, WorldGenLe
+@@ -3205,8 +3212,10 @@ public class ServerLevel extends Level implements ServerEntityGetter, WorldGenLe
              }
  
              entity.updateDynamicGameEventListener(DynamicGameEventListener::add);

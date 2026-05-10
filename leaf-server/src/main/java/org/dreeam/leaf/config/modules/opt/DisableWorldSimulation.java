@@ -5,7 +5,9 @@ import org.dreeam.leaf.config.EnumConfigCategory;
 
 public class DisableWorldSimulation extends ConfigModules {
     public static boolean blockEvents = false;
-    public static boolean blockTicking = false;
+
+    public static boolean blockUpdateTicking = false;
+    public static boolean blockEntityTicking = false;
 
     public static boolean fluidTicking = false;
     public static boolean chunkTicking = false;
@@ -31,15 +33,28 @@ public class DisableWorldSimulation extends ConfigModules {
             )
         );
 
-        blockTicking = config.getBoolean(
+        blockUpdateTicking = config.getBoolean(
             base + ".block-ticking",
-            blockTicking,
+            blockUpdateTicking,
             config.pickStringRegionBased(
                 """
                 Disables scheduled block ticking.
                 """,
                 """
                 禁用计划的方块刻更新。
+                """
+            )
+        );
+
+        blockEntityTicking = config.getBoolean(
+            base + ".block-entity-ticking",
+            blockEntityTicking,
+            config.pickStringRegionBased(
+                """
+                Disables block entity ticking.
+                """,
+                """
+                禁用方块实体刻更新。
                 """
             )
         );

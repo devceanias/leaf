@@ -1,0 +1,133 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Sun, 10 May 2026 17:53:34 +1000
+Subject: [PATCH] disable sleeping and respawn point set
+
+
+diff --git a/net/minecraft/server/level/ServerPlayer.java b/net/minecraft/server/level/ServerPlayer.java
+index 27754ae4263ecc87552230f258202f1087696bcb..91634e62c3e38d9a98d5b85b4663849e3583263c 100644
+--- a/net/minecraft/server/level/ServerPlayer.java
++++ b/net/minecraft/server/level/ServerPlayer.java
+@@ -64,7 +64,6 @@ import net.minecraft.network.protocol.game.ClientboundHurtAnimationPacket;
+ import net.minecraft.network.protocol.game.ClientboundMerchantOffersPacket;
+ import net.minecraft.network.protocol.game.ClientboundMountScreenOpenPacket;
+ import net.minecraft.network.protocol.game.ClientboundOpenBookPacket;
+-import net.minecraft.network.protocol.game.ClientboundOpenScreenPacket;
+ import net.minecraft.network.protocol.game.ClientboundOpenSignEditorPacket;
+ import net.minecraft.network.protocol.game.ClientboundPlayerAbilitiesPacket;
+ import net.minecraft.network.protocol.game.ClientboundPlayerCombatEndPacket;
+@@ -98,7 +97,6 @@ import net.minecraft.stats.ServerRecipeBook;
+ import net.minecraft.stats.ServerStatsCounter;
+ import net.minecraft.stats.Stat;
+ import net.minecraft.stats.Stats;
+-import net.minecraft.tags.FluidTags;
+ import net.minecraft.util.HashOps;
+ import net.minecraft.util.Mth;
+ import net.minecraft.util.ProblemReporter;
+@@ -198,6 +196,7 @@ import net.minecraft.world.scores.ScoreHolder;
+ import net.minecraft.world.scores.Scoreboard;
+ import net.minecraft.world.scores.Team;
+ import net.minecraft.world.scores.criteria.ObjectiveCriteria;
++import org.dreeam.leaf.config.modules.gameplay.BedRelatedMechanics;
+ import org.dreeam.leaf.config.modules.misc.DisableServerDebug;
+ import org.jspecify.annotations.Nullable;
+ import org.slf4j.Logger;
+@@ -1696,12 +1695,16 @@ public class ServerPlayer extends Player implements ca.spottedleaf.moonrise.patc
+             } else if (this.bedBlocked(bedPos, direction)) {
+                 return Either.left(Player.BedSleepingProblem.OBSTRUCTED);
+             } else {
+-                if (canSetSpawn) {
++                if (canSetSpawn && !BedRelatedMechanics.disableRespawnPointSet) {
+                     this.setRespawnPosition(
+                         new ServerPlayer.RespawnConfig(LevelData.RespawnData.of(this.level().dimension(), bedPos, this.getYRot(), this.getXRot()), false), true, com.destroystokyo.paper.event.player.PlayerSetSpawnEvent.Cause.BED // Paper - Add PlayerSetSpawnEvent
+                     );
+                 }
+ 
++                if (BedRelatedMechanics.disableSleeping) {
++                    return Either.right(Unit.INSTANCE);
++                }
++
+                 if (!canSleep) {
+                     return Either.left(bedRule.asProblem());
+                 } else {
+@@ -1747,6 +1750,10 @@ public class ServerPlayer extends Player implements ca.spottedleaf.moonrise.patc
+             return bedResult;
+         }
+ 
++        if (BedRelatedMechanics.disableSleeping) {
++            return Either.right(Unit.INSTANCE);
++        }
++
+         {
+             {
+                     Either<Player.BedSleepingProblem, Unit> either = super.startSleepInBed(bedPos, force).ifRight(unit -> {
+@@ -2808,8 +2815,15 @@ public class ServerPlayer extends Player implements ca.spottedleaf.moonrise.patc
+     }
+ 
+     public boolean setRespawnPosition(ServerPlayer.@Nullable RespawnConfig respawnConfig, boolean displayInChat, com.destroystokyo.paper.event.player.PlayerSetSpawnEvent.Cause cause) {
++        if (BedRelatedMechanics.disableRespawnPointSet &&
++            (cause == com.destroystokyo.paper.event.player.PlayerSetSpawnEvent.Cause.BED || cause == com.destroystokyo.paper.event.player.PlayerSetSpawnEvent.Cause.RESPAWN_ANCHOR)
++        ) {
++            return false;
++        }
++
+         org.bukkit.Location spawnLoc = null;
+         boolean actuallyDisplayInChat = false;
++
+         if (respawnConfig != null) {
+             actuallyDisplayInChat = displayInChat && !respawnConfig.isSamePosition(this.respawnConfig);
+             spawnLoc = org.bukkit.craftbukkit.util.CraftLocation.toBukkit(respawnConfig.respawnData().pos(), this.server.getLevel(respawnConfig.respawnData().dimension()));
+@@ -2824,6 +2838,7 @@ public class ServerPlayer extends Player implements ca.spottedleaf.moonrise.patc
+                 ? org.bukkit.event.player.PlayerSpawnChangeEvent.Cause.RESET
+                 : org.bukkit.event.player.PlayerSpawnChangeEvent.Cause.valueOf(cause.name())
+         );
++
+         dumbEvent.callEvent();
+ 
+         com.destroystokyo.paper.event.player.PlayerSetSpawnEvent event = new com.destroystokyo.paper.event.player.PlayerSetSpawnEvent(
+@@ -2834,6 +2849,7 @@ public class ServerPlayer extends Player implements ca.spottedleaf.moonrise.patc
+             actuallyDisplayInChat,
+             actuallyDisplayInChat ? io.papermc.paper.adventure.PaperAdventure.asAdventure(SPAWN_SET_MESSAGE) : null
+         );
++
+         event.setCancelled(dumbEvent.isCancelled());
+         if (!event.callEvent()) {
+             return false;
+@@ -2849,12 +2865,14 @@ public class ServerPlayer extends Player implements ca.spottedleaf.moonrise.patc
+                 ),
+                 event.isForced()
+             );
++
+             if (event.willNotifyPlayer() && event.getNotification() != null) {
+                 this.sendSystemMessage(io.papermc.paper.adventure.PaperAdventure.asVanilla(event.getNotification()));
+             }
+         }
+ 
+         this.respawnConfig = respawnConfig;
++
+         return true;
+         // Paper end - Add PlayerSetSpawnEvent
+     }
+diff --git a/net/minecraft/world/level/block/RespawnAnchorBlock.java b/net/minecraft/world/level/block/RespawnAnchorBlock.java
+index 126b36fc2b5e1404673e50235e21605c840d2f4c..6d0e1212162934e420defc48d9e7621cfb2c1704 100644
+--- a/net/minecraft/world/level/block/RespawnAnchorBlock.java
++++ b/net/minecraft/world/level/block/RespawnAnchorBlock.java
+@@ -40,6 +40,7 @@ import net.minecraft.world.level.pathfinder.PathComputationType;
+ import net.minecraft.world.level.storage.LevelData;
+ import net.minecraft.world.phys.BlockHitResult;
+ import net.minecraft.world.phys.Vec3;
++import org.dreeam.leaf.config.modules.gameplay.BedRelatedMechanics;
+ import org.jspecify.annotations.Nullable;
+ 
+ public class RespawnAnchorBlock extends Block {
+@@ -101,6 +102,10 @@ public class RespawnAnchorBlock extends Block {
+                 return InteractionResult.SUCCESS_SERVER;
+             } else {
+                 if (player instanceof ServerPlayer serverPlayer) {
++                    if (BedRelatedMechanics.disableRespawnPointSet) {
++                        return InteractionResult.CONSUME;
++                    }
++
+                     ServerPlayer.RespawnConfig respawnConfig = serverPlayer.getRespawnConfig();
+                     ServerPlayer.RespawnConfig respawnConfig1 = new ServerPlayer.RespawnConfig(
+                         LevelData.RespawnData.of(serverLevel.dimension(), pos, 0.0F, 0.0F), false

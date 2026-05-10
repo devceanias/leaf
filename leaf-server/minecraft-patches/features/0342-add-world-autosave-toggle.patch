@@ -213,10 +213,10 @@ index d109f450cd6e41fe2a884eb105752d63a21ddbfe..aaee85544696e822bbc08e0264ed3fec
      }
  
 diff --git a/net/minecraft/server/level/ServerLevel.java b/net/minecraft/server/level/ServerLevel.java
-index 251f33381bc1de45d21c6c3ed4ca84244a2bccce..ad3714c0c27f7db0a5248ce3a445e50f68e700d9 100644
+index 672cbe878e72abb99c0dd9070402ca6e5d1f6b33..0884d916c19a6aa5e362abcb49c08e48ba2aba43 100644
 --- a/net/minecraft/server/level/ServerLevel.java
 +++ b/net/minecraft/server/level/ServerLevel.java
-@@ -1720,6 +1720,10 @@ public class ServerLevel extends Level implements ServerEntityGetter, WorldGenLe
+@@ -1722,6 +1722,10 @@ public class ServerLevel extends Level implements ServerEntityGetter, WorldGenLe
  
      // Paper start - Incremental chunk and player saving
      public void saveIncrementally(boolean doFull) {
@@ -227,7 +227,7 @@ index 251f33381bc1de45d21c6c3ed4ca84244a2bccce..ad3714c0c27f7db0a5248ce3a445e50f
          if (doFull) {
              org.bukkit.Bukkit.getPluginManager().callEvent(new org.bukkit.event.world.WorldSaveEvent(this.getWorld()));
          }
-@@ -1769,6 +1773,10 @@ public class ServerLevel extends Level implements ServerEntityGetter, WorldGenLe
+@@ -1771,6 +1775,10 @@ public class ServerLevel extends Level implements ServerEntityGetter, WorldGenLe
          }
          // Paper end - add close param
  
