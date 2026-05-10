@@ -34,7 +34,7 @@ public class DisableWorldSimulation extends ConfigModules {
         );
 
         blockUpdateTicking = config.getBoolean(
-            base + ".block-ticking",
+            base + ".block-update-ticking",
             blockUpdateTicking,
             config.pickStringRegionBased(
                 """
