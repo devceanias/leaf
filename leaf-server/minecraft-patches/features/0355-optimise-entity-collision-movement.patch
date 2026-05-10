@@ -1,0 +1,598 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Sun, 10 May 2026 13:01:05 +1000
+Subject: [PATCH] optimise entity collision + movement
+
+
+diff --git a/ca/spottedleaf/moonrise/patches/collisions/CollisionUtil.java b/ca/spottedleaf/moonrise/patches/collisions/CollisionUtil.java
+index de764da80793d272ff597b4a0742ce785838799a..777e3dd7f9863bcae8672c6eb2b855d179dbc490 100644
+--- a/ca/spottedleaf/moonrise/patches/collisions/CollisionUtil.java
++++ b/ca/spottedleaf/moonrise/patches/collisions/CollisionUtil.java
+@@ -1916,10 +1916,11 @@ public final class CollisionUtil {
+         final int minBlockZ = Mth.floor(aabb.minZ - COLLISION_EPSILON) - 1;
+         final int maxBlockZ = Mth.floor(aabb.maxZ + COLLISION_EPSILON) + 1;
+ 
+-        final BlockPos.MutableBlockPos mutablePos = new BlockPos.MutableBlockPos();
+-        final CollisionContext collisionShape = new LazyEntityCollisionContext(entity);
+         final boolean useEntityCollisionShape = LazyEntityCollisionContext.useEntityCollisionShape(world, entity);
+ 
++        BlockPos.MutableBlockPos mutablePos = null;
++        CollisionContext collisionShape = null;
++
+         // special cases:
+         if (minBlockY > maxBlockY) {
+             // no point in checking
+@@ -1997,17 +1998,36 @@ public final class CollisionUtil {
+ 
+                                 final BlockState blockData = blocks.get(localBlockIndex);
+ 
+-                                if (((CollisionBlockState)blockData).moonrise$emptyContextCollisionShape()) {
++                                if (blockData.moonrise$emptyContextCollisionShape()) {
+                                     continue;
+                                 }
+ 
+-                                VoxelShape blockCollision = ((CollisionBlockState)blockData).moonrise$getConstantContextCollisionShape();
++                                VoxelShape blockCollision = ((CollisionBlockState) blockData).moonrise$getConstantContextCollisionShape();
+ 
+                                 if (edgeCount == 0 || ((edgeCount != 1 || blockData.hasLargeCollisionShape()) && (edgeCount != 2 || blockData.getBlock() == Blocks.MOVING_PISTON))) {
+-                                    mutablePos.set(blockX, blockY, blockZ);
+                                     if (useEntityCollisionShape) {
++                                        if (mutablePos == null) {
++                                            mutablePos = new BlockPos.MutableBlockPos();
++                                        }
++
++                                        if (collisionShape == null) {
++                                            collisionShape = new LazyEntityCollisionContext(entity);
++                                        }
++
++                                        mutablePos.set(blockX, blockY, blockZ);
++
+                                         blockCollision = collisionShape.getCollisionShape(blockData, world, mutablePos);
+                                     } else if (blockCollision == null) {
++                                        if (mutablePos == null) {
++                                            mutablePos = new BlockPos.MutableBlockPos();
++                                        }
++
++                                        if (collisionShape == null) {
++                                            collisionShape = new LazyEntityCollisionContext(entity);
++                                        }
++
++                                        mutablePos.set(blockX, blockY, blockZ);
++
+                                         blockCollision = blockData.getCollisionShape(world, mutablePos, collisionShape);
+                                     }
+ 
+@@ -2028,6 +2048,12 @@ public final class CollisionUtil {
+                                         }
+ 
+                                         if (predicate != null) {
++                                            if (mutablePos == null) {
++                                                mutablePos = new BlockPos.MutableBlockPos();
++                                            }
++
++                                            mutablePos.set(blockX, blockY, blockZ);
++
+                                             if (!predicate.test(blockData, mutablePos)) {
+                                                 continue;
+                                             }
+@@ -2053,6 +2079,12 @@ public final class CollisionUtil {
+                                     }
+ 
+                                     if (predicate != null) {
++                                        if (mutablePos == null) {
++                                            mutablePos = new BlockPos.MutableBlockPos();
++                                        }
++
++                                        mutablePos.set(blockX, blockY, blockZ);
++
+                                         if (!predicate.test(blockData, mutablePos)) {
+                                             continue;
+                                         }
+diff --git a/net/minecraft/world/entity/Entity.java b/net/minecraft/world/entity/Entity.java
+index c52e99bf9b88f3761d0f319343476e2779e269ae..87a0a41a48dd0da3274fa1cd1be82c1259282570 100644
+--- a/net/minecraft/world/entity/Entity.java
++++ b/net/minecraft/world/entity/Entity.java
+@@ -116,6 +116,7 @@ import net.minecraft.world.level.block.Rotation;
+ import net.minecraft.world.level.block.SoundType;
+ import net.minecraft.world.level.block.state.BlockState;
+ import net.minecraft.world.level.border.WorldBorder;
++import net.minecraft.world.level.chunk.ChunkAccess;
+ import net.minecraft.world.level.entity.EntityAccess;
+ import net.minecraft.world.level.entity.EntityInLevelCallback;
+ import net.minecraft.world.level.gameevent.DynamicGameEventListener;
+@@ -1851,14 +1852,22 @@ public abstract class Entity implements SyncedDataHolder, DebugValueSource, Name
+     // Leaf start - optimize checkInsideBlocks calls
+     private int checkInsideBlocks(Vec3 from, Vec3 to, InsideBlockEffectApplier.StepBasedCollector stepBasedCollector, LongSet visited, int maxSteps) {
+         final Level level = this.level();
+-        AABB aabb = this.getBoundingBox().move(to.subtract(this.position())).deflate(1.0E-5F);
++        final AABB aabb = this.getBoundingBox().move(to.subtract(this.position())).deflate(1.0E-5F);
++        final double travel = from.distanceToSqr(to);
++
++        if (travel <= 9.9999994E-11F) {
++            return checkInsideStationary(level, from, to, aabb, stepBasedCollector, visited, maxSteps);
++        }
++
+         final net.minecraft.world.level.chunk.ChunkAccess[] cachedChunk = {null};
+         final long[] cachedChunkPos = { Long.MIN_VALUE };
+ 
+-        boolean flag = from.distanceToSqr(to) > Mth.square(0.9999900000002526);
+-        boolean flag1 = this.level instanceof ServerLevel serverLevel
++        final boolean flag = travel > Mth.square(0.9999900000002526);
++        final boolean flag1 = this.level instanceof ServerLevel serverLevel
+             && serverLevel.getServer().debugSubscribers().hasAnySubscriberFor(DebugSubscriptions.ENTITY_BLOCK_INTERSECTIONS);
+-        AtomicInteger atomicInteger = new AtomicInteger();
++
++        final int[] last = {-1};
++
+         BlockGetter.forEachBlockIntersectedBetween(
+             from,
+             to,
+@@ -1869,7 +1878,8 @@ public abstract class Entity implements SyncedDataHolder, DebugValueSource, Name
+                 } else if (index >= maxSteps) {
+                     return false;
+                 } else {
+-                    atomicInteger.set(index);
++                    last[0] = index;
++
+                     final int chunkX = pos.getX() >> 4;
+                     final int chunkZ = pos.getZ() >> 4;
+                     final long currentChunkPos = ChunkPos.asLong(chunkX, chunkZ);
+@@ -1936,7 +1946,126 @@ public abstract class Entity implements SyncedDataHolder, DebugValueSource, Name
+                 }
+             }
+         );
+-        return atomicInteger.get() + 1;
++        return last[0] + 1;
++    }
++
++    private int checkInsideStationary(
++        final Level level,
++        final Vec3 from,
++        final Vec3 to,
++        final AABB aabb,
++        final InsideBlockEffectApplier.StepBasedCollector stepBasedCollector,
++        final LongSet visited,
++        final int maxAllowedSteps
++    ) {
++        final int minX = Mth.floor(aabb.minX);
++        final int maxX = Mth.floor(aabb.maxX);
++        final int minY = Mth.floor(aabb.minY);
++        final int maxY = Mth.floor(aabb.maxY);
++        final int minZ = Mth.floor(aabb.minZ);
++        final int maxZ = Mth.floor(aabb.maxZ);
++
++        final @Nullable ChunkAccess[] cachedChunkAccess = { null };
++        final long[] cachedChunkPos = {Long.MIN_VALUE};
++
++        int index = 0;
++
++        final boolean hasIntersectionSubscriber = level instanceof final ServerLevel server
++            && server.getServer().debugSubscribers().hasAnySubscriberFor(DebugSubscriptions.ENTITY_BLOCK_INTERSECTIONS);
++
++        for (int y = minY; y <= maxY; ++y) {
++            for (int z = minZ; z <= maxZ; ++z) {
++                for (int x = minX; x <= maxX; ++x) {
++                    if (!isAlive()) {
++                        return index;
++                    }
++
++                    if (index >= maxAllowedSteps) {
++                        return index;
++                    }
++
++                    final int chunkX = x >> 4;
++                    final int chunkZ = z >> 4;
++
++                    final long currentChunkPos = ChunkPos.asLong(chunkX, chunkZ);
++
++                    final BlockState state;
++                    final BlockPos pos = new BlockPos(x, y, z);
++
++                    if (cachedChunkPos[0] != currentChunkPos) {
++                        cachedChunkAccess[0] = level.getChunkIfLoaded(chunkX, chunkZ);
++                        cachedChunkPos[0] = currentChunkPos;
++                    }
++
++                    if (cachedChunkAccess[0] != null) {
++                        state = cachedChunkAccess[0].getBlockState(pos);
++                    } else {
++                        BlockState loaded = level.getBlockStateIfLoaded(pos);
++
++                        if (loaded == null) {
++                            loaded = Blocks.AIR.defaultBlockState();
++                        }
++
++                        state = loaded;
++                    }
++
++                    if (state.isAir()) {
++                        if (hasIntersectionSubscriber) {
++                            debugBlockIntersection((ServerLevel) level, pos, false, false);
++                        }
++
++                        ++index;
++
++                        continue;
++                    }
++
++                    final VoxelShape insideCollision = state.getEntityInsideCollisionShape(level, pos, this);
++                    final FluidState fluidState = state.getFluidState();
++
++                    final boolean insideBlock = insideCollision == Shapes.block()
++                        || collidedWithShapeMovingFrom(from, to, insideCollision.move(new Vec3(pos)));
++
++                    final boolean insideFluid = !fluidState.isEmpty() && collidedWithFluid(fluidState, pos, from, to);
++
++                    if ((insideBlock || insideFluid) && visited.add(pos.asLong())) {
++                        if (insideBlock) {
++                            try {
++                                stepBasedCollector.advanceStep(index, pos);
++
++                                state.entityInside(level, pos, this, stepBasedCollector, true);
++
++                                onInsideBlock(state);
++                            } catch (final Throwable throwable) {
++                                final CrashReport crashReport = CrashReport.forThrowable(throwable, "Colliding entity with block");
++                                final CrashReportCategory blockCategory = crashReport.addCategory("Block being collided with");
++
++                                CrashReportCategory.populateBlockDetails(blockCategory, level(), pos, state);
++
++                                final CrashReportCategory entityCategory = crashReport.addCategory("Entity being checked for collision");
++
++                                fillCrashReportCategory(entityCategory);
++
++                                throw new ReportedException(crashReport);
++                            }
++                        }
++
++                        if (insideFluid) {
++                            stepBasedCollector.advanceStep(index, pos);
++
++                            fluidState.entityInside(level, pos, this, stepBasedCollector);
++                        }
++                    }
++
++                    if (hasIntersectionSubscriber) {
++                        debugBlockIntersection((ServerLevel)level, pos, insideBlock, insideFluid);
++                    }
++
++                    ++index;
++                }
++            }
++        }
++
++        return index;
+     }
+     // Leaf end - optimize checkInsideBlocks calls
+ 
+@@ -2206,11 +2335,17 @@ public abstract class Entity implements SyncedDataHolder, DebugValueSource, Name
+     public void updateSwimming() {
+         if (this.isSwimming()) {
+             this.setSwimming(this.isSprinting() && this.isInWater() && !this.isPassenger());
+-        } else {
+-            this.setSwimming(
+-                this.isSprinting() && this.isUnderWater() && !this.isPassenger() && this.level().getFluidState(this.blockPosition).is(FluidTags.WATER)
+-            );
++
++            return;
+         }
++
++        if (!isSprinting() || !isUnderWater() || isPassenger()) {
++            setSwimming(false);
++
++            return;
++        }
++
++        setSwimming(level().getFluidState(blockPosition).is(FluidTags.WATER));
+     }
+ 
+     protected boolean updateInWaterStateAndDoFluidPushing() {
+@@ -2251,9 +2386,16 @@ public abstract class Entity implements SyncedDataHolder, DebugValueSource, Name
+             final int blockZ = this.blockPosition.getZ();
+             final int blockY = Mth.floor(eyeY);
+             final Level level = this.level();
++
++            final BlockPos blockPos = new BlockPos(blockX, blockY, blockZ);
++
+             FluidState fluidState = level.getFluidStateIfLoadedUnchecked(blockX, blockY, blockZ);
+-            if (fluidState == null) { fluidState = level.getFluidState(new BlockPos(blockX, blockY, blockZ)); }
+-            final double d = fluidState.isEmpty() ? blockY : blockY + fluidState.getHeight(level, new BlockPos(blockX, blockY, blockZ));
++
++            if (fluidState == null) {
++                fluidState = level.getFluidState(blockPos);
++            }
++
++            final double d = fluidState.isEmpty() ? blockY : blockY + fluidState.getHeight(level, blockPos);
+             // Leaf end - optimize eye block position
+             if (d > eyeY) {
+                 // Leaf start - Optimize isEyeInFluid
+diff --git a/net/minecraft/world/entity/EntityReference.java b/net/minecraft/world/entity/EntityReference.java
+index 9b5b4d26e2b059203f0245bf2110182378ccb8a6..f682591281d78ebc5cca0ccfadecf441df22b20f 100644
+--- a/net/minecraft/world/entity/EntityReference.java
++++ b/net/minecraft/world/entity/EntityReference.java
+@@ -104,15 +104,15 @@ public final class EntityReference<StoredEntityType extends UniquelyIdentifyable
+     }
+ 
+     public static @Nullable Entity getEntity(@Nullable EntityReference<Entity> reference, Level level) {
+-        return get(reference, level, Entity.class);
++        return reference != null ? reference.leaf$getEntity(level) : null;
+     }
+ 
+     public static @Nullable LivingEntity getLivingEntity(@Nullable EntityReference<LivingEntity> reference, Level level) {
+-        return get(reference, level, LivingEntity.class);
++        return reference != null ? reference.leaf$getLivingEntity(level) : null;
+     }
+ 
+     public static @Nullable Player getPlayer(@Nullable EntityReference<Player> reference, Level level) {
+-        return get(reference, level, Player.class);
++        return reference != null ? reference.leaf$getPlayer(level) : null;
+     }
+ 
+     public static <StoredEntityType extends UniquelyIdentifyable> @Nullable EntityReference<StoredEntityType> read(ValueInput input, String key) {
+@@ -151,4 +151,95 @@ public final class EntityReference<StoredEntityType extends UniquelyIdentifyable
+         return ref == null ? null : ref.getEntity(uuidLookup, entityClass);
+     }
+     // Paper end - utility for reading an entity from a nullable entity reference via a UUIDLookup
++
++    @SuppressWarnings("unchecked")
++    private @Nullable Entity leaf$getEntity(final Level level) {
++        final Optional<StoredEntityType> stored = this.entity.right();
++
++        if (stored.isPresent()) {
++            final StoredEntityType current = stored.get();
++
++            if (!current.isRemoved()) {
++                return (Entity) current;
++            }
++
++            this.entity = Either.left(current.getUUID());
++        }
++
++        final Optional<UUID> uuid = this.entity.left();
++
++        if (uuid.isEmpty()) {
++            return null;
++        }
++
++        final Entity entity = level.getEntityInAnyDimension(uuid.get());
++
++        if (entity == null || entity.isRemoved()) {
++            return null;
++        }
++
++        this.entity = Either.right((StoredEntityType) entity);
++
++        return entity;
++    }
++
++    @SuppressWarnings("unchecked")
++    private @Nullable LivingEntity leaf$getLivingEntity(final Level level) {
++        final Optional<StoredEntityType> stored = this.entity.right();
++
++        if (stored.isPresent()) {
++            final StoredEntityType current = stored.get();
++
++            if (!current.isRemoved()) {
++                return (LivingEntity)current;
++            }
++
++            this.entity = Either.left(current.getUUID());
++        }
++
++        final Optional<UUID> uuid = this.entity.left();
++
++        if (uuid.isEmpty()) {
++            return null;
++        }
++
++        if (!(level.getEntityInAnyDimension(uuid.get()) instanceof final LivingEntity living) || living.isRemoved()) {
++            return null;
++        }
++
++        this.entity = Either.right((StoredEntityType) living);
++
++        return living;
++    }
++
++    @SuppressWarnings("unchecked")
++    private @Nullable Player leaf$getPlayer(final Level level) {
++        final Optional<StoredEntityType> stored = this.entity.right();
++
++        if (stored.isPresent()) {
++            final StoredEntityType current = stored.get();
++
++            if (!current.isRemoved()) {
++                return (Player)current;
++            }
++
++            this.entity = Either.left(current.getUUID());
++        }
++
++        final Optional<UUID> uuid = this.entity.left();
++
++        if (uuid.isEmpty()) {
++            return null;
++        }
++
++        final Player player = level.getPlayerInAnyDimension(uuid.get());
++
++        if (player == null || player.isRemoved()) {
++            return null;
++        }
++
++        this.entity = Either.right((StoredEntityType) player);
++
++        return player;
++    }
+ }
+diff --git a/net/minecraft/world/level/Level.java b/net/minecraft/world/level/Level.java
+index e6b54a9d1166670ffd5b1c095bcb9cb8ffbbaa11..29f02601d2324cc37d3381dd3ec27addd45c3ff6 100644
+--- a/net/minecraft/world/level/Level.java
++++ b/net/minecraft/world/level/Level.java
+@@ -1,11 +1,11 @@
+ package net.minecraft.world.level;
+ 
++import ca.spottedleaf.moonrise.patches.collisions.CollisionUtil;
++import ca.spottedleaf.moonrise.patches.collisions.block.CollisionBlockState;
+ import com.google.common.collect.Lists;
+ import com.mojang.serialization.Codec;
+ import java.io.IOException;
+-import java.util.Collection;
+-import java.util.List;
+-import java.util.UUID;
++import java.util.*;
+ import java.util.function.Consumer;
+ import java.util.function.Predicate;
+ import java.util.stream.Collectors;
+@@ -87,7 +87,6 @@ import org.dreeam.leaf.util.VisibilityCollisions;
+ import org.jspecify.annotations.Nullable;
+ 
+ // CraftBukkit start
+-import java.util.Map;
+ import net.minecraft.server.level.ServerLevel;
+ import org.bukkit.craftbukkit.CraftServer;
+ import org.bukkit.craftbukkit.CraftWorld;
+@@ -657,10 +656,17 @@ public abstract class Level implements LevelAccessor, AutoCloseable, ca.spottedl
+         final int minBlockZ = Mth.floor(aabb.minZ - ca.spottedleaf.moonrise.patches.collisions.CollisionUtil.COLLISION_EPSILON) - 1;
+         final int maxBlockZ = Mth.floor(aabb.maxZ + ca.spottedleaf.moonrise.patches.collisions.CollisionUtil.COLLISION_EPSILON) + 1;
+ 
+-        final BlockPos.MutableBlockPos mutablePos = new BlockPos.MutableBlockPos();
+-        final ca.spottedleaf.moonrise.patches.collisions.CollisionUtil.LazyEntityCollisionContext collisionShape = new ca.spottedleaf.moonrise.patches.collisions.CollisionUtil.LazyEntityCollisionContext(entity);
+-        BlockPos selected = null;
++        BlockPos.MutableBlockPos mutablePos = null;
++        ca.spottedleaf.moonrise.patches.collisions.CollisionUtil.LazyEntityCollisionContext collisionShape = null;
++
++        boolean hasFound = false;
++
++        int selectedX = 0;
++        int selectedY = 0;
++        int selectedZ = 0;
++
+         double selectedDistance = Double.MAX_VALUE;
++
+         final Vec3 entityPos = entity.position();
+ 
+         // special cases:
+@@ -693,10 +699,13 @@ public abstract class Level implements LevelAccessor, AutoCloseable, ca.spottedl
+                 // bound y
+                 for (int currChunkY = minChunkY; currChunkY <= maxChunkY; ++currChunkY) {
+                     final int sectionIdx = currChunkY - minSection;
++
+                     if (sectionIdx < 0 || sectionIdx >= sections.length) {
+                         continue;
+                     }
++
+                     final net.minecraft.world.level.chunk.LevelChunkSection section = sections[sectionIdx];
++
+                     if (section.hasOnlyAir()) {
+                         // empty
+                         continue;
+@@ -716,37 +725,58 @@ public abstract class Level implements LevelAccessor, AutoCloseable, ca.spottedl
+ 
+                     for (int currY = minYIterate; currY <= maxYIterate; ++currY) {
+                         final int blockY = currY | (currChunkY << 4);
+-                        mutablePos.setY(blockY);
++
+                         for (int currZ = minZIterate; currZ <= maxZIterate; ++currZ) {
+                             final int blockZ = currZ | (currChunkZ << 4);
+-                            mutablePos.setZ(blockZ);
++
+                             for (int currX = minXIterate; currX <= maxXIterate; ++currX) {
+                                 final int localBlockIndex = (currX) | (currZ << 4) | ((currY) << 8);
+                                 final int blockX = currX | (currChunkX << 4);
+-                                mutablePos.setX(blockX);
+ 
+                                 final int edgeCount = hasSpecial ? ((blockX == minBlockX || blockX == maxBlockX) ? 1 : 0) +
+                                     ((blockY == minBlockY || blockY == maxBlockY) ? 1 : 0) +
+                                     ((blockZ == minBlockZ || blockZ == maxBlockZ) ? 1 : 0) : 0;
++
+                                 if (edgeCount == 3) {
+                                     continue;
+                                 }
+ 
+-                                final double distance = mutablePos.distToCenterSqr(entityPos);
+-                                if (distance > selectedDistance || (distance == selectedDistance && selected.compareTo(mutablePos) >= 0)) {
++                                final double dx = ((double)blockX + 0.5) - entityPos.x;
++                                final double dy = ((double)blockY + 0.5) - entityPos.y;
++                                final double dz = ((double)blockZ + 0.5) - entityPos.z;
++                                final double distance = dx * dx + dy * dy + dz * dz;
++
++                                if (distance > selectedDistance) {
++                                    continue;
++                                }
++
++                                if (distance == selectedDistance &&
++                                    hasFound &&
++                                    (selectedY > blockY || (selectedY == blockY && (selectedZ > blockZ || (selectedZ == blockZ && selectedX >= blockX))))
++                                ) {
+                                     continue;
+                                 }
+ 
+                                 final BlockState blockData = blocks.get(localBlockIndex);
+ 
+-                                if (((ca.spottedleaf.moonrise.patches.collisions.block.CollisionBlockState)blockData).moonrise$emptyContextCollisionShape()) {
++                                if (blockData.moonrise$emptyContextCollisionShape()) {
+                                     continue;
+                                 }
+ 
+-                                VoxelShape blockCollision = ((ca.spottedleaf.moonrise.patches.collisions.block.CollisionBlockState)blockData).moonrise$getConstantContextCollisionShape();
++                                VoxelShape blockCollision = ((CollisionBlockState) blockData).moonrise$getConstantContextCollisionShape();
+ 
+                                 if (edgeCount == 0 || ((edgeCount != 1 || blockData.hasLargeCollisionShape()) && (edgeCount != 2 || blockData.getBlock() == Blocks.MOVING_PISTON))) {
+                                     if (blockCollision == null) {
++                                        if (mutablePos == null) {
++                                            mutablePos = new BlockPos.MutableBlockPos();
++                                        }
++
++                                        if (collisionShape == null) {
++                                            collisionShape = new CollisionUtil.LazyEntityCollisionContext(entity);
++                                        }
++
++                                        mutablePos.set(blockX, blockY, blockZ);
++
+                                         blockCollision = blockData.getCollisionShape((Level)(Object)this, mutablePos, collisionShape);
+ 
+                                         if (blockCollision.isEmpty()) {
+@@ -758,13 +788,18 @@ public abstract class Level implements LevelAccessor, AutoCloseable, ca.spottedl
+                                     final AABB shiftedAABB = aabb.move(-(double)blockX, -(double)blockY, -(double)blockZ);
+ 
+                                     final AABB singleAABB = ((ca.spottedleaf.moonrise.patches.collisions.shape.CollisionVoxelShape)blockCollision).moonrise$getSingleAABBRepresentation();
++
+                                     if (singleAABB != null) {
+                                         if (!ca.spottedleaf.moonrise.patches.collisions.CollisionUtil.voxelShapeIntersect(singleAABB, shiftedAABB)) {
+                                             continue;
+                                         }
+ 
+-                                        selected = mutablePos.immutable();
++                                        hasFound = true;
++                                        selectedX = blockX;
++                                        selectedY = blockY;
++                                        selectedZ = blockZ;
+                                         selectedDistance = distance;
++
+                                         continue;
+                                     }
+ 
+@@ -772,8 +807,12 @@ public abstract class Level implements LevelAccessor, AutoCloseable, ca.spottedl
+                                         continue;
+                                     }
+ 
+-                                    selected = mutablePos.immutable();
++                                    hasFound = true;
++                                    selectedX = blockX;
++                                    selectedY = blockY;
++                                    selectedZ = blockZ;
+                                     selectedDistance = distance;
++
+                                     continue;
+                                 }
+                             }
+@@ -783,7 +822,7 @@ public abstract class Level implements LevelAccessor, AutoCloseable, ca.spottedl
+             }
+         }
+ 
+-        return java.util.Optional.ofNullable(selected);
++        return hasFound ? Optional.of(new BlockPos(selectedX, selectedY, selectedZ)) : Optional.empty();
+     }
+     // Paper end - optimise collisions
+     // Paper start - getblock optimisations - cache world height/sections
