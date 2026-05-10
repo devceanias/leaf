@@ -1,0 +1,329 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Sun, 10 May 2026 13:01:05 +1000
+Subject: [PATCH] optimise item sync + equipment detection
+
+
+diff --git a/net/minecraft/core/component/PatchedDataComponentMap.java b/net/minecraft/core/component/PatchedDataComponentMap.java
+index 285aabb234463e34ed426be04eb7cc582d3e9ba1..61ddcb0f053d386310d268e5feb1deff994da404 100644
+--- a/net/minecraft/core/component/PatchedDataComponentMap.java
++++ b/net/minecraft/core/component/PatchedDataComponentMap.java
+@@ -11,14 +11,19 @@ import java.util.Objects;
+ import java.util.Optional;
+ import java.util.Set;
+ import java.util.Map.Entry;
++import java.util.concurrent.atomic.AtomicLong;
+ import java.util.stream.Collectors;
+ import org.jspecify.annotations.Nullable;
+ 
++@SuppressWarnings("OptionalAssignedToNull")
+ public final class PatchedDataComponentMap implements DataComponentMap, net.caffeinemc.mods.lithium.common.util.change_tracking.ChangePublisher<PatchedDataComponentMap> { // Leaf - Lithium - equipment tracking
++    private static final AtomicLong SYNC_TAG_GENERATOR = new AtomicLong();
++
+     private final DataComponentMap prototype;
+     private Reference2ObjectMap<DataComponentType<?>, Optional<?>> patch;
+     private boolean copyOnWrite;
+     private net.caffeinemc.mods.lithium.common.util.change_tracking.ChangeSubscriber<PatchedDataComponentMap> subscriber; // Leaf - Lithium - equipment tracking
++    private long componentSyncTag = getNextSyncTag();
+ 
+     public PatchedDataComponentMap(DataComponentMap prototype) {
+         this(prototype, Reference2ObjectMaps.emptyMap(), true);
+@@ -30,6 +35,14 @@ public final class PatchedDataComponentMap implements DataComponentMap, net.caff
+         this.copyOnWrite = copyOnWrite;
+     }
+ 
++    private static long getNextSyncTag() {
++        return SYNC_TAG_GENERATOR.incrementAndGet();
++    }
++
++    public long leaf$getComponentSyncTag() {
++        return componentSyncTag;
++    }
++
+     public static PatchedDataComponentMap fromPatch(DataComponentMap prototype, DataComponentPatch patch) {
+         if (isPatchSanitized(prototype, patch.map)) {
+             return new PatchedDataComponentMap(prototype, patch.map, true);
+@@ -76,6 +89,12 @@ public final class PatchedDataComponentMap implements DataComponentMap, net.caff
+             optional = (Optional<T>)this.patch.put(component, Optional.ofNullable(value));
+         }
+ 
++        final T previous = optional != null ? optional.orElse(object) : object;
++
++        if (!Objects.equals(previous, value)) {
++            markChanged();
++        }
++
+         return optional != null ? optional.orElse(object) : object;
+     }
+ 
+@@ -93,19 +112,68 @@ public final class PatchedDataComponentMap implements DataComponentMap, net.caff
+             optional = (Optional<? extends T>)this.patch.remove(component);
+         }
+ 
+-        return (T)(optional != null ? optional.orElse(null) : object);
++        final T previous;
++
++        if (optional == null) {
++            previous = object;
++        } else if (optional.isPresent()) {
++            previous = optional.get();
++        } else {
++            previous = object;
++        }
++
++        if (previous != null) {
++            markChanged();
++        }
++
++        if (optional == null) {
++            return object;
++        } else if (optional.isPresent()) {
++            return optional.get();
++        }
++
++        return null;
+     }
+ 
+     public void applyPatch(DataComponentPatch patch) {
+         this.ensureMapOwnership();
+ 
++        boolean changed = false;
++
+         for (Entry<DataComponentType<?>, Optional<?>> entry : Reference2ObjectMaps.fastIterable(patch.map)) {
+-            this.applyPatch(entry.getKey(), entry.getValue());
++            changed |= this.applyPatch(entry.getKey(), entry.getValue());
++        }
++
++        if (!changed) {
++            return;
+         }
++
++        markChanged();
+     }
+ 
+-    private void applyPatch(DataComponentType<?> component, Optional<?> value) {
++    @SuppressWarnings("ConstantValue")
++    private boolean applyPatch(DataComponentType<?> component, Optional<?> value) {
+         Object object = this.prototype.get(component);
++
++        final Optional<?> old = patch.get(component);
++        final Object previous;
++
++        if (old == null) {
++            previous = object;
++        } else if (old.isPresent()) {
++            previous = old.get();
++        } else {
++            previous = object;
++        }
++
++        final Object next;
++
++        if (value.isPresent()) {
++            next = value.get();
++        } else {
++            next = object;
++        }
++
+         if (value.isPresent()) {
+             if (value.get().equals(object)) {
+                 this.patch.remove(component);
+@@ -117,17 +185,33 @@ public final class PatchedDataComponentMap implements DataComponentMap, net.caff
+         } else {
+             this.patch.remove(component);
+         }
++
++        return !Objects.equals(previous, next);
+     }
+ 
+     public void restorePatch(DataComponentPatch patch) {
+         this.ensureMapOwnership();
++
++        if (this.patch.equals(patch.map)) {
++            return;
++        }
++
+         this.patch.clear();
+         this.patch.putAll(patch.map);
++
++        markChanged();
+     }
+ 
+     public void clearPatch() {
+         this.ensureMapOwnership();
++
++        if (patch.isEmpty()) {
++            return;
++        }
++
+         this.patch.clear();
++
++        markChanged();
+     }
+ 
+     public void setAll(DataComponentMap map) {
+@@ -148,6 +232,10 @@ public final class PatchedDataComponentMap implements DataComponentMap, net.caff
+         }
+     }
+ 
++    private void markChanged() {
++        componentSyncTag = getNextSyncTag();
++    }
++
+     @Override
+     public Set<DataComponentType<?>> keySet() {
+         if (this.patch.isEmpty()) {
+@@ -221,7 +309,12 @@ public final class PatchedDataComponentMap implements DataComponentMap, net.caff
+ 
+     public PatchedDataComponentMap copy() {
+         this.copyOnWrite = true;
+-        return new PatchedDataComponentMap(this.prototype, this.patch, true);
++
++        final PatchedDataComponentMap copy = new PatchedDataComponentMap(this.prototype, this.patch, true);
++
++        copy.componentSyncTag = componentSyncTag;
++
++        return copy;
+     }
+ 
+     public DataComponentMap toImmutableMap() {
+@@ -249,9 +342,19 @@ public final class PatchedDataComponentMap implements DataComponentMap, net.caff
+         // Leaf start - Optimize PatchedDataComponentMap equals
+         if (this == other) return true;
+         if (!(other instanceof PatchedDataComponentMap that)) return false;
++
++        if (componentSyncTag == that.componentSyncTag) {
++            return true;
++        }
++
+         if (this.patch.size() != that.patch.size()) {
+             return false;
+         }
++
++        if (prototype == that.prototype && patch == that.patch) {
++            return true;
++        }
++
+         if (!this.prototype.equals(that.prototype)) {
+             return false;
+         }
+diff --git a/net/minecraft/world/entity/LivingEntity.java b/net/minecraft/world/entity/LivingEntity.java
+index 1acd5cf416121a4639c2885da3f4424f46db1429..50a979ff3f5eb8d422b89aad22ff77af9b5d517f 100644
+--- a/net/minecraft/world/entity/LivingEntity.java
++++ b/net/minecraft/world/entity/LivingEntity.java
+@@ -1,5 +1,6 @@
+ package net.minecraft.world.entity;
+ 
++import com.destroystokyo.paper.event.player.PlayerArmorChangeEvent;
+ import com.google.common.annotations.VisibleForTesting;
+ import com.google.common.base.Objects;
+ import com.google.common.collect.ImmutableList;
+@@ -11,6 +12,7 @@ import com.mojang.serialization.Codec;
+ import com.mojang.serialization.DataResult;
+ import com.mojang.serialization.Dynamic;
+ import com.mojang.serialization.JavaOps;
++import io.papermc.paper.event.entity.EntityEquipmentChangedEvent;
+ import it.unimi.dsi.fastutil.doubles.DoubleDoubleImmutablePair;
+ import it.unimi.dsi.fastutil.objects.Object2LongMap;
+ import it.unimi.dsi.fastutil.objects.Object2LongOpenHashMap;
+@@ -3739,6 +3741,10 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+         if (!isArmorStandUpdateNoTick && !this.equipment.lithium$hasUnsentEquipmentChanges()) return null;
+         // Leaf end - Lithium - equipment tracking
+         Map<EquipmentSlot, ItemStack> map = null;
++
++        final boolean hasEquipmentChangedEvent = EntityEquipmentChangedEvent.getHandlerList().getRegisteredListeners().length > 0;
++        final boolean hasArmorChangeEvent = this instanceof ServerPlayer && PlayerArmorChangeEvent.getHandlerList().getRegisteredListeners().length > 0;
++
+         // Paper start - EntityEquipmentChangedEvent
+         record EquipmentChangeImpl(org.bukkit.inventory.ItemStack oldItem, org.bukkit.inventory.ItemStack newItem) implements io.papermc.paper.event.entity.EntityEquipmentChangedEvent.EquipmentChange {
+             @Override
+@@ -3755,23 +3761,39 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+         // Paper end - EntityEquipmentChangedEvent
+ 
+         for (EquipmentSlot equipmentSlot : EquipmentSlot.VALUES_ARRAY) { // Gale - JettPack - reduce array allocations
+-            ItemStack itemStack = this.lastEquipmentItems.get(equipmentSlot);
+-            ItemStack itemBySlot = this.getItemBySlot(equipmentSlot);
++            final ItemStack itemStack = this.lastEquipmentItems.get(equipmentSlot);
++            final ItemStack itemBySlot = this.getItemBySlot(equipmentSlot);
++
+             if (this.equipmentHasChanged(itemStack, itemBySlot)) {
+-                // Paper start - EntityEquipmentChangedEvent, PlayerArmorChangeEvent
+-                final org.bukkit.inventory.ItemStack oldItem = CraftItemStack.asBukkitCopy(itemStack);
+-                final org.bukkit.inventory.ItemStack newItem = CraftItemStack.asBukkitCopy(itemBySlot);
+-                if (this instanceof ServerPlayer && equipmentSlot.getType() == EquipmentSlot.Type.HUMANOID_ARMOR) {
+-                    new com.destroystokyo.paper.event.player.PlayerArmorChangeEvent((org.bukkit.entity.Player) this.getBukkitEntity(), com.destroystokyo.paper.event.player.PlayerArmorChangeEvent.SlotType.valueOf(equipmentSlot.name()), oldItem, newItem).callEvent();
+-                }
+-                // Paper end - EntityEquipmentChangedEvent, PlayerArmorChangeEvent
+                 if (map == null) {
+                     map = Maps.newEnumMap(EquipmentSlot.class);
+-                    equipmentChanges = Maps.newEnumMap(org.bukkit.inventory.EquipmentSlot.class); // Paper - EntityEquipmentChangedEvent
++
++                    if (hasEquipmentChangedEvent) {
++                        equipmentChanges = Maps.newEnumMap(org.bukkit.inventory.EquipmentSlot.class); // Paper - EntityEquipmentChangedEvent
++                    }
+                 }
+ 
+                 map.put(equipmentSlot, itemBySlot);
+-                equipmentChanges.put(org.bukkit.craftbukkit.CraftEquipmentSlot.getSlot(equipmentSlot), new EquipmentChangeImpl(oldItem, newItem)); // Paper - EntityEquipmentChangedEvent
++
++                if (hasArmorChangeEvent && equipmentSlot.getType() == EquipmentSlot.Type.HUMANOID_ARMOR) {
++                    final org.bukkit.inventory.ItemStack oldItem = CraftItemStack.asBukkitCopy(itemStack);
++                    final org.bukkit.inventory.ItemStack newItem = CraftItemStack.asBukkitCopy(itemBySlot);
++
++                    new PlayerArmorChangeEvent(
++                        (org.bukkit.entity.Player)this.getBukkitEntity(),
++                        PlayerArmorChangeEvent.SlotType.valueOf(equipmentSlot.name()),
++                        oldItem,
++                        newItem
++                    ).callEvent();
++                }
++
++                if (hasEquipmentChangedEvent) {
++                    final org.bukkit.inventory.ItemStack oldItem = CraftItemStack.asBukkitCopy(itemStack);
++                    final org.bukkit.inventory.ItemStack newItem = CraftItemStack.asBukkitCopy(itemBySlot);
++
++                    equipmentChanges.put(org.bukkit.craftbukkit.CraftEquipmentSlot.getSlot(equipmentSlot), new EquipmentChangeImpl(oldItem, newItem)); // Paper - EntityEquipmentChangedEvent
++                }
++
+                 AttributeMap attributes = this.getAttributes();
+                 if (!itemStack.isEmpty()) {
+                     this.stopLocationBasedEffects(itemStack, equipmentSlot, attributes);
+@@ -3797,14 +3819,16 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+                 }
+             }
+ 
+-            new io.papermc.paper.event.entity.EntityEquipmentChangedEvent(this.getBukkitLivingEntity(), equipmentChanges).callEvent(); // Paper - EntityEquipmentChangedEvent
++            if (hasEquipmentChangedEvent) {
++                new EntityEquipmentChangedEvent(this.getBukkitLivingEntity(), equipmentChanges).callEvent(); // Paper - EntityEquipmentChangedEvent
++            }
+         }
+ 
+         return map;
+     }
+ 
+     public boolean equipmentHasChanged(ItemStack oldItem, ItemStack newItem) {
+-        return !ItemStack.matches(newItem, oldItem);
++        return oldItem != newItem && !ItemStack.matches(newItem, oldItem);
+     }
+ 
+     private void handleHandSwap(Map<EquipmentSlot, ItemStack> hands) {
+diff --git a/net/minecraft/world/item/ItemStack.java b/net/minecraft/world/item/ItemStack.java
+index 94a3756e1630c744c9ab2fc65e094ec2e8796356..31265f4b4116cd51b29f053275fd7f634c08e7ec 100644
+--- a/net/minecraft/world/item/ItemStack.java
++++ b/net/minecraft/world/item/ItemStack.java
+@@ -929,8 +929,14 @@ public final class ItemStack implements DataComponentHolder, net.caffeinemc.mods
+         return stack == other || stack.is(other.getItem()); // Gale - optimize identical item checks
+     }
+ 
++    private static boolean hasSameSyncComponents(final ItemStack stack, final ItemStack other) {
++        return stack.components == other.components || stack.components.leaf$getComponentSyncTag() == other.components.leaf$getComponentSyncTag();
++    }
++
+     public static boolean isSameItemSameComponents(ItemStack stack, ItemStack other) {
+-        return stack == other || stack.is(other.getItem()) && (stack.isEmpty() && other.isEmpty() || Objects.equals(stack.components, other.components)); // Gale - optimize identical item checks
++        return stack == other || stack.is(other.getItem()) && (
++            stack.isEmpty() && other.isEmpty() || hasSameSyncComponents(stack, other) || Objects.equals(stack.components, other.components)
++        ); // Gale - optimize identical item checks
+     }
+ 
+     public static boolean matchesIgnoringComponents(ItemStack stack, ItemStack other, Predicate<DataComponentType<?>> ignoreType) {
