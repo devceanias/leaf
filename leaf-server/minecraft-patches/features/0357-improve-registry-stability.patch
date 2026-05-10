@@ -1,0 +1,314 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Sun, 10 May 2026 17:20:52 +1000
+Subject: [PATCH] improve registry stability
+
+
+diff --git a/net/minecraft/core/MappedRegistry.java b/net/minecraft/core/MappedRegistry.java
+index ad1558693564ebd18f5e16b85ae552d2af95efef..4bfcc86cbf476ef97f249ef1fcfc7c4c07210863 100644
+--- a/net/minecraft/core/MappedRegistry.java
++++ b/net/minecraft/core/MappedRegistry.java
+@@ -42,6 +42,9 @@ public class MappedRegistry<T> implements WritableRegistry<T> {
+     MappedRegistry.TagSet<T> allTags = MappedRegistry.TagSet.unbound();
+     private boolean frozen;
+     private @Nullable Map<T, Holder.Reference<T>> unregisteredIntrusiveHolders;
++
++    private final Object registryMutationLock = new Object();
++
+     // Paper start - support pre-filling in registry mod API
+     private final Map<Identifier, T> temporaryUnfrozenMap = new HashMap<>();
+ 
+@@ -105,37 +108,57 @@ public class MappedRegistry<T> implements WritableRegistry<T> {
+ 
+     @Override
+     public Holder.Reference<T> register(ResourceKey<T> key, T value, RegistrationInfo registrationInfo) {
+-        this.validateWrite(key);
+-        Objects.requireNonNull(key);
+-        Objects.requireNonNull(value);
+-        if (this.byLocation.containsKey(key.identifier())) {
+-            throw (IllegalStateException)Util.pauseInIde(new IllegalStateException("Adding duplicate key '" + key + "' to registry"));
+-        } else if (this.byValue.containsKey(value)) {
+-            throw (IllegalStateException)Util.pauseInIde(new IllegalStateException("Adding duplicate value '" + value + "' to registry"));
+-        } else {
+-            Holder.Reference<T> reference;
+-            if (this.unregisteredIntrusiveHolders != null) {
+-                reference = this.unregisteredIntrusiveHolders.remove(value);
+-                if (reference == null) {
+-                    throw new AssertionError("Missing intrusive holder for " + key + ":" + value);
++        synchronized (registryMutationLock) {
++            this.validateWrite(key);
++            Objects.requireNonNull(key);
++            Objects.requireNonNull(value);
++            if (this.byLocation.containsKey(key.identifier())) {
++                throw (IllegalStateException)Util.pauseInIde(new IllegalStateException("Adding duplicate key '" + key + "' to registry"));
++            } else if (this.byValue.containsKey(value)) {
++                throw (IllegalStateException)Util.pauseInIde(new IllegalStateException("Adding duplicate value '" + value + "' to registry"));
++            } else {
++                Holder.Reference<T> reference;
++                if (this.unregisteredIntrusiveHolders != null) {
++                    reference = this.unregisteredIntrusiveHolders.remove(value);
++                    if (reference == null) {
++                        throw new AssertionError("Missing intrusive holder for " + key + ":" + value);
++                    }
++
++                    reference.bindKey(key);
++                } else {
++                    reference = this.byKey.computeIfAbsent(key, resourceKey -> Holder.Reference.createStandAlone(this, (ResourceKey<T>)resourceKey));
+                 }
+ 
+-                reference.bindKey(key);
+-            } else {
+-                reference = this.byKey.computeIfAbsent(key, resourceKey -> Holder.Reference.createStandAlone(this, (ResourceKey<T>)resourceKey));
++                this.byKey.put(key, reference);
++                this.byLocation.put(key.identifier(), reference);
++                this.byValue.put(value, reference);
++                int size = this.byId.size();
++                this.byId.add(reference);
++                this.toId.put(value, size);
++                this.registrationInfos.put(key, registrationInfo);
++                this.registryLifecycle = this.registryLifecycle.add(registrationInfo.lifecycle());
++                this.temporaryUnfrozenMap.put(key.identifier(), value); // Paper - support pre-filling in registry mod API
++                this.injectFluidRegister(key, value); // Paper - fluid method optimisations
++                return reference;
+             }
++        }
++    }
+ 
+-            this.byKey.put(key, reference);
+-            this.byLocation.put(key.identifier(), reference);
+-            this.byValue.put(value, reference);
+-            int size = this.byId.size();
+-            this.byId.add(reference);
+-            this.toId.put(value, size);
+-            this.registrationInfos.put(key, registrationInfo);
+-            this.registryLifecycle = this.registryLifecycle.add(registrationInfo.lifecycle());
+-            this.temporaryUnfrozenMap.put(key.identifier(), value); // Paper - support pre-filling in registry mod API
+-            this.injectFluidRegister(key, value); // Paper - fluid method optimisations
+-            return reference;
++    public List<SnapshotEntry<T>> snapshotRegistryEntries() {
++        synchronized (registryMutationLock) {
++            final List<SnapshotEntry<T>> entries = new ArrayList<>(byId.size());
++
++            for (final Holder.Reference<T> reference : byId) {
++                final ResourceKey<T> key = reference.key();
++
++                entries.add(new SnapshotEntry<>(
++                    key,
++                    reference.value(),
++                    registrationInfos.get(key)
++                ));
++            }
++
++            return entries;
+         }
+     }
+ 
+@@ -287,46 +310,48 @@ public class MappedRegistry<T> implements WritableRegistry<T> {
+ 
+     @Override
+     public Registry<T> freeze() {
+-        if (this.frozen) {
+-            return this;
+-        } else {
+-            this.frozen = true;
+-            this.temporaryUnfrozenMap.clear(); // Paper - support pre-filling in registry mod API
+-            this.byValue.forEach((object, reference) -> reference.bindValue((T)object));
+-            List<Identifier> list = this.byKey
+-                .entrySet()
+-                .stream()
+-                .filter(entry -> !entry.getValue().isBound())
+-                .map(entry -> entry.getKey().identifier())
+-                .sorted()
+-                .toList();
+-            if (!list.isEmpty()) {
+-                throw new IllegalStateException("Unbound values in registry " + this.key() + ": " + list);
++        synchronized (registryMutationLock) {
++            if (this.frozen) {
++                return this;
+             } else {
+-                if (this.unregisteredIntrusiveHolders != null) {
+-                    if (!this.unregisteredIntrusiveHolders.isEmpty()) {
+-                        throw new IllegalStateException("Some intrusive holders were not registered: " + this.unregisteredIntrusiveHolders.values());
+-                    }
++                this.frozen = true;
++                this.temporaryUnfrozenMap.clear(); // Paper - support pre-filling in registry mod API
++                this.byValue.forEach((object, reference) -> reference.bindValue((T)object));
++                List<Identifier> list = this.byKey
++                    .entrySet()
++                    .stream()
++                    .filter(entry -> !entry.getValue().isBound())
++                    .map(entry -> entry.getKey().identifier())
++                    .sorted()
++                    .toList();
++                if (!list.isEmpty()) {
++                    throw new IllegalStateException("Unbound values in registry " + this.key() + ": " + list);
++                } else {
++                    if (this.unregisteredIntrusiveHolders != null) {
++                        if (!this.unregisteredIntrusiveHolders.isEmpty()) {
++                            throw new IllegalStateException("Some intrusive holders were not registered: " + this.unregisteredIntrusiveHolders.values());
++                        }
+ 
+-                    this.unregisteredIntrusiveHolders = null;
+-                }
++                        this.unregisteredIntrusiveHolders = null;
++                    }
+ 
+-                if (this.allTags.isBound()) {
+-                    throw new IllegalStateException("Tags already present before freezing");
+-                } else {
+-                    List<Identifier> list1 = this.frozenTags
+-                        .entrySet()
+-                        .stream()
+-                        .filter(entry -> !entry.getValue().isBound())
+-                        .map(entry -> entry.getKey().location())
+-                        .sorted()
+-                        .toList();
+-                    if (!list1.isEmpty()) {
+-                        throw new IllegalStateException("Unbound tags in registry " + this.key() + ": " + list1);
++                    if (this.allTags.isBound()) {
++                        throw new IllegalStateException("Tags already present before freezing");
+                     } else {
+-                        this.allTags = MappedRegistry.TagSet.fromMap(this.frozenTags);
+-                        this.refreshTagsInHolders();
+-                        return this;
++                        List<Identifier> list1 = this.frozenTags
++                            .entrySet()
++                            .stream()
++                            .filter(entry -> !entry.getValue().isBound())
++                            .map(entry -> entry.getKey().location())
++                            .sorted()
++                            .toList();
++                        if (!list1.isEmpty()) {
++                            throw new IllegalStateException("Unbound tags in registry " + this.key() + ": " + list1);
++                        } else {
++                            this.allTags = MappedRegistry.TagSet.fromMap(this.frozenTags);
++                            this.refreshTagsInHolders();
++                            return this;
++                        }
+                     }
+                 }
+             }
+@@ -335,11 +360,13 @@ public class MappedRegistry<T> implements WritableRegistry<T> {
+ 
+     @Override
+     public Holder.Reference<T> createIntrusiveHolder(T value) {
+-        if (this.unregisteredIntrusiveHolders == null) {
+-            throw new IllegalStateException("This registry can't create intrusive holders");
+-        } else {
+-            this.validateWrite();
+-            return this.unregisteredIntrusiveHolders.computeIfAbsent(value, object -> Holder.Reference.createIntrusive(this, (T)object));
++        synchronized (registryMutationLock) {
++            if (this.unregisteredIntrusiveHolders == null) {
++                throw new IllegalStateException("This registry can't create intrusive holders");
++            } else {
++                this.validateWrite();
++                return this.unregisteredIntrusiveHolders.computeIfAbsent(value, object -> Holder.Reference.createIntrusive(this, (T)object));
++            }
+         }
+     }
+ 
+@@ -530,9 +557,17 @@ public class MappedRegistry<T> implements WritableRegistry<T> {
+     // Paper start
+     // used to clear intrusive holders from GameEvent, Item, Block, EntityType, and Fluid from unused instances of those types
+     public void clearIntrusiveHolder(final T instance) {
+-        if (this.unregisteredIntrusiveHolders != null) {
+-            this.unregisteredIntrusiveHolders.remove(instance);
++        synchronized (registryMutationLock) {
++            if (this.unregisteredIntrusiveHolders != null) {
++                this.unregisteredIntrusiveHolders.remove(instance);
++            }
+         }
+     }
+     // Paper end
++
++    public record SnapshotEntry<T>(
++        ResourceKey<T> key,
++        T value,
++        @Nullable RegistrationInfo registrationInfo
++    ) {}
+ }
+diff --git a/net/minecraft/core/RegistrySynchronization.java b/net/minecraft/core/RegistrySynchronization.java
+index ba8d32fd6fb1c255ea77d076ab2bbc134c7fe7be..b85d337a84da842b7b756ce39d06b3f734015a46 100644
+--- a/net/minecraft/core/RegistrySynchronization.java
++++ b/net/minecraft/core/RegistrySynchronization.java
+@@ -44,32 +44,59 @@ public class RegistrySynchronization {
+         registryAccess.lookup(registryData.key())
+             .ifPresent(
+                 registry -> {
+-                    List<RegistrySynchronization.PackedRegistryEntry> list = new ArrayList<>(registry.size());
+-                    registry.listElements()
+-                        .forEach(
+-                            value -> {
+-                                boolean isPresent = registry.registrationInfo(value.key())
+-                                    .flatMap(RegistrationInfo::knownPackInfo)
+-                                    .filter(packs::contains)
+-                                    .isPresent();
+-                                Optional<Tag> optional;
+-                                if (isPresent) {
+-                                    optional = Optional.empty();
+-                                } else {
+-                                    Tag tag = registryData.elementCodec()
+-                                        .encodeStart(ops, value.value())
+-                                        .getOrThrow(string -> new IllegalArgumentException("Failed to serialize " + value.key() + ": " + string));
+-                                    optional = Optional.of(tag);
+-                                }
+-
+-                                list.add(new RegistrySynchronization.PackedRegistryEntry(value.key().identifier(), optional));
+-                            }
+-                        );
++                    final List<RegistrySynchronization.PackedRegistryEntry> list;
++
++                    if (registry instanceof final MappedRegistry<T> mappedRegistry) {
++                        final List<MappedRegistry.SnapshotEntry<T>> snapshot = mappedRegistry.snapshotRegistryEntries();
++
++                        list = new ArrayList<>(snapshot.size());
++
++                        for (final MappedRegistry.SnapshotEntry<T> entry : snapshot) {
++                            list.add(packEntry(ops, registryData, packs, entry.key(), entry.value(), entry.registrationInfo()));
++                        }
++                    } else {
++                        list = new ArrayList<>(registry.size());
++
++                        registry.listElements().forEach(value -> list.add(
++                            packEntry(
++                                ops,
++                                registryData,
++                                packs,
++                                value.key(),
++                                value.value(),
++                                registry.registrationInfo(value.key()).orElse(null)
++                            )
++                        ));
++                    }
++
+                     packetSender.accept(registry.key(), list);
+                 }
+             );
+     }
+ 
++    private static <T> RegistrySynchronization.PackedRegistryEntry packEntry(
++        final DynamicOps<Tag> ops,
++        final RegistryDataLoader.RegistryData<T> registryData,
++        final Set<KnownPack> packs,
++        final ResourceKey<T> key,
++        final T value,
++        final RegistrationInfo registrationInfo
++    ) {
++        final Optional<Tag> data;
++
++        if (registrationInfo.knownPackInfo().filter(packs::contains).isPresent()) {
++            data = Optional.empty();
++        } else {
++            final Tag tag = registryData.elementCodec()
++                .encodeStart(ops, value)
++                .getOrThrow(string -> new IllegalArgumentException("Failed to serialize " + key + ": " + string));
++
++            data = Optional.of(tag);
++        }
++
++        return new RegistrySynchronization.PackedRegistryEntry(key.identifier(), data);
++    }
++
+     private static Stream<RegistryAccess.RegistryEntry<?>> ownedNetworkableRegistries(RegistryAccess registryAccess) {
+         return registryAccess.registries().filter(registry -> isNetworkable(registry.key()));
+     }
