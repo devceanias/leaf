@@ -1,0 +1,1159 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Sun, 10 May 2026 13:01:05 +1000
+Subject: [PATCH] optimise enchantment ticking + condition eval
+
+
+diff --git a/net/minecraft/advancements/criterion/BlockPredicate.java b/net/minecraft/advancements/criterion/BlockPredicate.java
+index 919c6243093c85501a939ec9c48063aed1fbcdb1..834c012b9fedc9be031bf8d82e84d7cd94cf60f4 100644
+--- a/net/minecraft/advancements/criterion/BlockPredicate.java
++++ b/net/minecraft/advancements/criterion/BlockPredicate.java
+@@ -51,22 +51,30 @@ public record BlockPredicate(
+     public boolean matches(ServerLevel level, BlockPos pos) {
+         if (!level.isLoaded(pos)) {
+             return false;
+-        } else if (!this.matchesState(level.getBlockState(pos))) {
++        }
++
++        return matches(level, pos, level.getBlockState(pos));
++    }
++
++    public boolean matches(final ServerLevel level, final BlockPos pos, final BlockState state) {
++        if (!matchesState(state)) {
+             return false;
+-        } else {
+-            if (this.nbt.isPresent() || !this.components.isEmpty()) {
+-                BlockEntity blockEntity = level.getBlockEntity(pos);
+-                if (this.nbt.isPresent() && !matchesBlockEntity(level, blockEntity, this.nbt.get())) {
+-                    return false;
+-                }
+-
+-                if (!this.components.isEmpty() && !matchesComponents(blockEntity, this.components)) {
+-                    return false;
+-                }
++        }
++
++        final boolean present = nbt.isPresent();
++        final boolean empty = components.isEmpty();
++
++        if (present || !empty) {
++            final BlockEntity entity = level.getBlockEntity(pos);
++
++            if (present && !matchesBlockEntity(level, entity, nbt.get())) {
++                return false;
+             }
+ 
+-            return true;
++            return empty || matchesComponents(entity, components);
+         }
++
++        return true;
+     }
+ 
+     public boolean matches(BlockInWorld block) {
+diff --git a/net/minecraft/advancements/criterion/EntityPredicate.java b/net/minecraft/advancements/criterion/EntityPredicate.java
+index 59a0bf7cd589b4f1d24c7c56c58cf511b58ebeea..3743219bb4451ead7a551d57edb70ba90c7d4b1b 100644
+--- a/net/minecraft/advancements/criterion/EntityPredicate.java
++++ b/net/minecraft/advancements/criterion/EntityPredicate.java
+@@ -6,6 +6,7 @@ import com.mojang.serialization.codecs.RecordCodecBuilder;
+ import java.util.List;
+ import java.util.Optional;
+ import java.util.stream.Stream;
++import net.minecraft.core.BlockPos;
+ import net.minecraft.core.HolderGetter;
+ import net.minecraft.core.component.DataComponentGetter;
+ import net.minecraft.server.level.ServerLevel;
+@@ -93,75 +94,124 @@ public record EntityPredicate(
+     public boolean matches(ServerLevel level, @Nullable Vec3 position, @Nullable Entity entity) {
+         if (entity == null) {
+             return false;
+-        } else if (this.entityType.isPresent() && !this.entityType.get().matches(entity.getType())) {
++        }
++
++        if (entityType.isPresent() && !entityType.get().matches(entity.getType())) {
+             return false;
+-        } else {
+-            if (position == null) {
+-                if (this.distanceToPlayer.isPresent()) {
+-                    return false;
+-                }
+-            } else if (this.distanceToPlayer.isPresent()
+-                && !this.distanceToPlayer.get().matches(position.x, position.y, position.z, entity.getX(), entity.getY(), entity.getZ())) {
++        }
++
++        if (position == null) {
++            if (distanceToPlayer.isPresent()) {
+                 return false;
+             }
++        } else if (
++            distanceToPlayer.isPresent() &&
++            !distanceToPlayer.get().matches(
++                position.x,
++                position.y,
++                position.z,
++                entity.getX(),
++                entity.getY(),
++                entity.getZ()
++            )
++        ) {
++            return false;
++        }
+ 
+-            if (this.movement.isPresent()) {
+-                Vec3 knownMovement = entity.getKnownMovement();
+-                Vec3 vec3 = knownMovement.scale(20.0);
+-                if (!this.movement.get().matches(vec3.x, vec3.y, vec3.z, entity.fallDistance)) {
+-                    return false;
+-                }
++        if (movement.isPresent()) {
++            final Vec3 knownMovement = entity.getKnownMovement();
++
++            if (!movement.get().matches(knownMovement.x * 20.0, knownMovement.y * 20.0, knownMovement.z * 20.0, entity.fallDistance)) {
++                return false;
+             }
++        }
++
++        final Optional<LocationPredicate> located = location.located();
++
++        if (located.isPresent() && !located.get().matches(level, entity.getX(), entity.getY(), entity.getZ())) {
++            return false;
++        }
++
++        final Optional<LocationPredicate> stepping = location.steppingOn();
+ 
+-            if (this.location.located.isPresent() && !this.location.located.get().matches(level, entity.getX(), entity.getY(), entity.getZ())) {
++        if (stepping.isPresent()) {
++            if (!entity.onGround()) {
+                 return false;
+-            } else {
+-                if (this.location.steppingOn.isPresent()) {
+-                    Vec3 knownMovement = Vec3.atCenterOf(entity.getOnPos());
+-                    if (!entity.onGround() || !this.location.steppingOn.get().matches(level, knownMovement.x(), knownMovement.y(), knownMovement.z())) {
+-                        return false;
+-                    }
+-                }
++            }
+ 
+-                if (this.location.affectsMovement.isPresent()) {
+-                    Vec3 knownMovement = Vec3.atCenterOf(entity.getBlockPosBelowThatAffectsMyMovement());
+-                    if (!this.location.affectsMovement.get().matches(level, knownMovement.x(), knownMovement.y(), knownMovement.z())) {
+-                        return false;
+-                    }
+-                }
++            if (!stepping.get().matches(level, entity.getOnPos())) {
++                return false;
++            }
++        }
+ 
+-                if (this.effects.isPresent() && !this.effects.get().matches(entity)) {
+-                    return false;
+-                } else if (this.flags.isPresent() && !this.flags.get().matches(entity)) {
+-                    return false;
+-                } else if (this.equipment.isPresent() && !this.equipment.get().matches(entity)) {
+-                    return false;
+-                } else if (this.subPredicate.isPresent() && !this.subPredicate.get().matches(entity, level, position)) {
+-                    return false;
+-                } else if (this.vehicle.isPresent() && !this.vehicle.get().matches(level, position, entity.getVehicle())) {
+-                    return false;
+-                } else if (this.passenger.isPresent()
+-                    && entity.getPassengers().stream().noneMatch(entity1 -> this.passenger.get().matches(level, position, entity1))) {
+-                    return false;
+-                } else if (this.targetedEntity.isPresent()
+-                    && !this.targetedEntity.get().matches(level, position, entity instanceof Mob ? ((Mob)entity).getTarget() : null)) {
+-                    return false;
+-                } else if (this.periodicTick.isPresent() && entity.tickCount % this.periodicTick.get() != 0) {
+-                    return false;
+-                } else {
+-                    if (this.team.isPresent()) {
+-                        Team team = entity.getTeam();
+-                        if (team == null || !this.team.get().equals(team.getName())) {
+-                            return false;
+-                        }
+-                    }
+-
+-                    return (!this.slots.isPresent() || this.slots.get().matches(entity))
+-                        && this.components.test((DataComponentGetter)entity)
+-                        && (this.nbt.isEmpty() || this.nbt.get().matches(entity));
++        final Optional<LocationPredicate> locationAffectsMovement = location.affectsMovement();
++
++        if (locationAffectsMovement.isPresent()) {
++            if (!locationAffectsMovement.get().matches(level, entity.getBlockPosBelowThatAffectsMyMovement())) {
++                return false;
++            }
++        }
++
++        if (effects.isPresent() && !effects.get().matches(entity)) {
++            return false;
++        }
++
++        if (flags.isPresent() && !flags.get().matches(entity)) {
++            return false;
++        }
++
++        if (equipment.isPresent() && !equipment.get().matches(entity)) {
++            return false;
++        }
++
++        if (subPredicate.isPresent() && !subPredicate.get().matches(entity, level, position)) {
++            return false;
++        }
++
++        if (vehicle.isPresent() && !vehicle.get().matches(level, position, entity.getVehicle())) {
++            return false;
++        }
++
++        if (passenger.isPresent()) {
++            final List<Entity> passengers = entity.getPassengers();
++            final EntityPredicate passenger = this.passenger.get();
++
++            boolean matched = false;
++
++            for (Entity value : passengers) {
++                if (!passenger.matches(level, position, value)) {
++                    continue;
+                 }
++
++                matched = true;
++
++                break;
+             }
++
++            if (!matched) {
++                return false;
++            }
++        }
++
++        if (targetedEntity.isPresent() && !targetedEntity.get().matches(level, position, entity instanceof Mob mob ? mob.getTarget() : null)) {
++            return false;
+         }
++
++        if (periodicTick.isPresent() && entity.tickCount % periodicTick.get() != 0) {
++            return false;
++        }
++
++        if (team.isPresent()) {
++            final Team team = entity.getTeam();
++
++            if (team == null || !this.team.get().equals(team.getName())) {
++                return false;
++            }
++        }
++
++        return (!slots.isPresent() || slots.get().matches(entity))
++            && components.test(entity)
++            && (nbt.isEmpty() || nbt.get().matches(entity));
+     }
+ 
+     public static LootContext createContext(ServerPlayer player, Entity entity) {
+diff --git a/net/minecraft/advancements/criterion/FluidPredicate.java b/net/minecraft/advancements/criterion/FluidPredicate.java
+index f7800c38bd8b063ed5bbc5556e32e5e3d42f620e..86e15f74cde1f15ac7e264180b80b101860cb739 100644
+--- a/net/minecraft/advancements/criterion/FluidPredicate.java
++++ b/net/minecraft/advancements/criterion/FluidPredicate.java
+@@ -23,11 +23,14 @@ public record FluidPredicate(Optional<HolderSet<Fluid>> fluids, Optional<StatePr
+     public boolean matches(ServerLevel level, BlockPos pos) {
+         if (!level.isLoaded(pos)) {
+             return false;
+-        } else {
+-            FluidState fluidState = level.getFluidState(pos);
+-            return (!this.fluids.isPresent() || fluidState.is(this.fluids.get()))
+-                && (!this.properties.isPresent() || this.properties.get().matches(fluidState));
+         }
++
++        return matches(level.getFluidState(pos));
++    }
++
++    public boolean matches(final FluidState fluid) {
++        return (fluids.isEmpty() || fluid.is(fluids.get()))
++            && (properties.isEmpty() || properties.get().matches(fluid));
+     }
+ 
+     public static class Builder {
+diff --git a/net/minecraft/advancements/criterion/LocationPredicate.java b/net/minecraft/advancements/criterion/LocationPredicate.java
+index ec3a665fd1d566325e52a49909d739102daef72c..6682c79fa37ee6bebb3b884e55d8115ed0b1ba91 100644
+--- a/net/minecraft/advancements/criterion/LocationPredicate.java
++++ b/net/minecraft/advancements/criterion/LocationPredicate.java
+@@ -3,6 +3,7 @@ package net.minecraft.advancements.criterion;
+ import com.mojang.serialization.Codec;
+ import com.mojang.serialization.codecs.RecordCodecBuilder;
+ import java.util.Optional;
++import io.papermc.paper.configuration.GlobalConfiguration;
+ import net.minecraft.core.BlockPos;
+ import net.minecraft.core.Holder;
+ import net.minecraft.core.HolderSet;
+@@ -13,7 +14,9 @@ import net.minecraft.server.level.ServerLevel;
+ import net.minecraft.world.level.Level;
+ import net.minecraft.world.level.biome.Biome;
+ import net.minecraft.world.level.block.CampfireBlock;
++import net.minecraft.world.level.block.state.BlockState;
+ import net.minecraft.world.level.levelgen.structure.Structure;
++import org.dreeam.leaf.config.modules.opt.OptimizeBiome;
+ 
+ public record LocationPredicate(
+     Optional<LocationPredicate.PositionPredicate> position,
+@@ -42,21 +45,78 @@ public record LocationPredicate(
+     );
+ 
+     public boolean matches(ServerLevel level, double x, double y, double z) {
+-        if (this.position.isPresent() && !this.position.get().matches(x, y, z)) {
++        final BlockPos pos = BlockPos.containing(x, y, z);
++
++        return matches(level, x, y, z, pos, level.isLoaded(pos));
++    }
++
++    public boolean matches(final ServerLevel level, final BlockPos pos) {
++        return matches(level, pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5, pos, level.isLoaded(pos));
++    }
++
++    private boolean matches(
++        final ServerLevel level, final double x, final double y, final double z, final BlockPos pos, final boolean loaded
++    ) {
++        if (position.isPresent() && !position.get().matches(x, y, z)) {
++            return false;
++        }
++
++        if (dimension.isPresent() && dimension.get() != (GlobalConfiguration.get().misc.strictAdvancementDimensionCheck ? level.dimension() : org.bukkit.craftbukkit.util.CraftDimensionUtil.getMainDimensionKey(level))) { // Paper - Add option for strict advancement dimension checks
++            return false;
++        }
++
++        if (biomes.isEmpty() &&
++            structures.isEmpty() &&
++            smokey.isEmpty() &&
++            light.isEmpty() &&
++            block.isEmpty() &&
++            fluid.isEmpty() &&
++            canSeeSky.isEmpty()
++        ) {
++            return true;
++        }
++
++        if (!loaded) {
++            return false;
++        }
++
++        if (biomes.isPresent() && !biomes.get().contains(OptimizeBiome.advancement ? level.getBiomeCached(null, pos) : level.getBiome(pos))) { // Leaf - cache getBiome
+             return false;
+-        } else if (this.dimension.isPresent() && this.dimension.get() != (io.papermc.paper.configuration.GlobalConfiguration.get().misc.strictAdvancementDimensionCheck ? level.dimension() : org.bukkit.craftbukkit.util.CraftDimensionUtil.getMainDimensionKey(level))) { // Paper - Add option for strict advancement dimension checks
++        }
++
++        if (structures.isPresent() && !level.structureManager().getStructureWithPieceAt(pos, structures.get()).isValid()) {
++            return false;
++        }
++
++        if (smokey.isPresent() && smokey.get() != CampfireBlock.isSmokeyPos(level, pos)) {
++            return false;
++        }
++
++        if (light.isPresent() && !light.get().matches(level, pos)) {
+             return false;
+-        } else {
+-            BlockPos blockPos = BlockPos.containing(x, y, z);
+-            boolean isLoaded = level.isLoaded(blockPos);
+-            return (!this.biomes.isPresent() || isLoaded && this.biomes.get().contains(org.dreeam.leaf.config.modules.opt.OptimizeBiome.advancement ? level.getBiomeCached(null, blockPos) : level.getBiome(blockPos))) // Leaf - cache getBiome
+-                && (!this.structures.isPresent() || isLoaded && level.structureManager().getStructureWithPieceAt(blockPos, this.structures.get()).isValid())
+-                && (!this.smokey.isPresent() || isLoaded && this.smokey.get() == CampfireBlock.isSmokeyPos(level, blockPos))
+-                && (!this.light.isPresent() || this.light.get().matches(level, blockPos))
+-                && (!this.block.isPresent() || this.block.get().matches(level, blockPos))
+-                && (!this.fluid.isPresent() || this.fluid.get().matches(level, blockPos))
+-                && (!this.canSeeSky.isPresent() || this.canSeeSky.get() == level.canSeeSky(blockPos));
+         }
++
++        BlockState state = null;
++
++        if (block.isPresent()) {
++            state = level.getBlockState(pos);
++
++            if (!block.get().matches(level, pos, state)) {
++                return false;
++            }
++        }
++
++        if (fluid.isPresent()) {
++            if (state == null) {
++                state = level.getBlockState(pos);
++            }
++
++            if (!fluid.get().matches(state.getFluidState())) {
++                return false;
++            }
++        }
++
++        return canSeeSky.isEmpty() || canSeeSky.get() == level.canSeeSky(pos);
+     }
+ 
+     public static class Builder {
+diff --git a/net/minecraft/util/context/ContextMap.java b/net/minecraft/util/context/ContextMap.java
+index 0cc65dab8a56cf46919adb37e60eea8f4b96c54b..42179e6b63974d187356b5cffc541bd987e69dae 100644
+--- a/net/minecraft/util/context/ContextMap.java
++++ b/net/minecraft/util/context/ContextMap.java
+@@ -1,6 +1,5 @@
+ package net.minecraft.util.context;
+ 
+-import com.google.common.collect.Sets;
+ import java.util.IdentityHashMap;
+ import java.util.Map;
+ import java.util.NoSuchElementException;
+@@ -106,4 +105,8 @@ public class ContextMap {
+             // Leaf end - Optimize ContextMap.create
+         }
+     }
++
++    public static ContextMap leaf$createUncheckedMap(final Map<ContextKey<?>, Object> params) {
++        return new ContextMap(params);
++    }
+ }
+diff --git a/net/minecraft/world/item/enchantment/ConditionalEffect.java b/net/minecraft/world/item/enchantment/ConditionalEffect.java
+index fb66ce29f9d3d6c53d56b3656dc829c1fb12569b..6ca88559b7cfc0fbb0bfcaa65ba2764eb8f33969 100644
+--- a/net/minecraft/world/item/enchantment/ConditionalEffect.java
++++ b/net/minecraft/world/item/enchantment/ConditionalEffect.java
+@@ -36,6 +36,8 @@ public record ConditionalEffect<T>(T effect, Optional<LootItemCondition> require
+     }
+ 
+     public boolean matches(LootContext context) {
+-        return this.requirements.isEmpty() || this.requirements.get().test(context);
++        final Optional<LootItemCondition> requirements = this.requirements;
++
++        return requirements.isEmpty() || requirements.get().test(context);
+     }
+ }
+diff --git a/net/minecraft/world/item/enchantment/Enchantment.java b/net/minecraft/world/item/enchantment/Enchantment.java
+index 0ed170c379183b9188c7d747e90f6a701787a8cf..21de03f546188ae6a1186039436ac1c507765efc 100644
+--- a/net/minecraft/world/item/enchantment/Enchantment.java
++++ b/net/minecraft/world/item/enchantment/Enchantment.java
+@@ -50,9 +50,6 @@ import net.minecraft.world.item.enchantment.effects.EnchantmentLocationBasedEffe
+ import net.minecraft.world.item.enchantment.effects.EnchantmentValueEffect;
+ import net.minecraft.world.level.block.state.BlockState;
+ import net.minecraft.world.level.storage.loot.LootContext;
+-import net.minecraft.world.level.storage.loot.LootParams;
+-import net.minecraft.world.level.storage.loot.parameters.LootContextParamSets;
+-import net.minecraft.world.level.storage.loot.parameters.LootContextParams;
+ import net.minecraft.world.level.storage.loot.predicates.LootItemCondition;
+ import net.minecraft.world.phys.Vec3;
+ import org.apache.commons.lang3.mutable.MutableFloat;
+@@ -300,10 +297,36 @@ public record Enchantment(Component description, Enchantment.EnchantmentDefiniti
+     public void doPostAttack(
+         ServerLevel level, int enchantmentLevel, EnchantedItemInUse item, EnchantmentTarget target, Entity entity, DamageSource damageSource
+     ) {
+-        for (TargetedConditionalEffect<EnchantmentEntityEffect> targetedConditionalEffect : this.getEffects(EnchantmentEffectComponents.POST_ATTACK)) {
+-            if (target == targetedConditionalEffect.enchanted()) {
+-                doPostAttack(targetedConditionalEffect, level, enchantmentLevel, item, entity, damageSource);
++        LootContext context = null;
++
++        for (final TargetedConditionalEffect<EnchantmentEntityEffect> effect : getEffects(EnchantmentEffectComponents.POST_ATTACK)) {
++            if (target != effect.enchanted()) {
++                continue;
++            }
++
++            final Optional<LootItemCondition> requirements = effect.requirements();
++
++            if (requirements.isPresent()) {
++                if (context == null) {
++                    context = LootContext.leaf$createEnchantedDamage(level, entity, enchantmentLevel, damageSource);
++                }
++
++                if (!requirements.get().test(context)) {
++                    continue;
++                }
+             }
++
++            final Entity recipient = switch (effect.affected()) {
++                case ATTACKER -> damageSource.getEntity();
++                case DAMAGING_ENTITY -> damageSource.getDirectEntity();
++                case VICTIM -> entity;
++            };
++
++            if (recipient == null) {
++                continue;
++            }
++
++            effect.effect().apply(level, enchantmentLevel, item, recipient, recipient.position());
+         }
+     }
+ 
+@@ -328,9 +351,14 @@ public record Enchantment(Component description, Enchantment.EnchantmentDefiniti
+     }
+ 
+     public void doLunge(ServerLevel level, int enchantmentLevel, EnchantedItemInUse item, Entity entity) {
+-        applyEffects(
++        final Vec3 pos = entity.position();
++
++        applyEntityEffects(
+             this.getEffects(EnchantmentEffectComponents.POST_PIERCING_ATTACK),
+-            entityContext(level, enchantmentLevel, entity, entity.position()),
++            level,
++            enchantmentLevel,
++            entity,
++            pos,
+             // Paper start - EntityLungeEvent
+             e -> {
+                 int enchLevel = enchantmentLevel;
+@@ -343,7 +371,7 @@ public record Enchantment(Component description, Enchantment.EnchantmentDefiniti
+                     enchLevel = event.getLungePower();
+                 }
+ 
+-                e.apply(level, enchLevel, item, entity, entity.position());
++                e.apply(level, enchLevel, item, entity, pos);
+             }
+             // Paper end - EntityLungeEvent
+         );
+@@ -374,26 +402,41 @@ public record Enchantment(Component description, Enchantment.EnchantmentDefiniti
+         if (tickEffects.isEmpty()) {
+             return;
+         }
+-        applyEffects(
++
++        final Vec3 pos = entity.position();
++
++        applyEntityEffects(
+             tickEffects,
+-        // Leaf end - reduce enchantment allocations
+-            entityContext(level, enchantmentLevel, entity, entity.position()),
+-            enchantmentEntityEffect -> enchantmentEntityEffect.apply(level, enchantmentLevel, item, entity, entity.position())
++            level,
++            enchantmentLevel,
++            entity,
++            pos,
++            enchantmentEntityEffect -> enchantmentEntityEffect.apply(level, enchantmentLevel, item, entity, pos)
+         );
++        // Leaf end - reduce enchantment allocations
+     }
+ 
+     public void onProjectileSpawned(ServerLevel level, int enchantmentLevel, EnchantedItemInUse item, Entity entity) {
+-        applyEffects(
++        final Vec3 pos = entity.position();
++
++        applyEntityEffects(
+             this.getEffects(EnchantmentEffectComponents.PROJECTILE_SPAWNED),
+-            entityContext(level, enchantmentLevel, entity, entity.position()),
+-            enchantmentEntityEffect -> enchantmentEntityEffect.apply(level, enchantmentLevel, item, entity, entity.position())
++            level,
++            enchantmentLevel,
++            entity,
++            pos,
++            enchantmentEntityEffect -> enchantmentEntityEffect.apply(level, enchantmentLevel, item, entity, pos)
+         );
+     }
+ 
+     public void onHitBlock(ServerLevel level, int enchantmentLevel, EnchantedItemInUse item, Entity entity, Vec3 pos, BlockState state) {
+-        applyEffects(
++        applyHitEffects(
+             this.getEffects(EnchantmentEffectComponents.HIT_BLOCK),
+-            blockHitContext(level, enchantmentLevel, entity, pos, state),
++            level,
++            enchantmentLevel,
++            entity,
++            pos,
++            state,
+             enchantmentEntityEffect -> enchantmentEntityEffect.apply(level, enchantmentLevel, item, entity, pos)
+         );
+     }
+@@ -405,9 +448,11 @@ public record Enchantment(Component description, Enchantment.EnchantmentDefiniti
+         ItemStack tool,
+         MutableFloat value
+     ) {
+-        applyEffects(
++        applyItemEffects(
+             this.getEffects(component),
+-            itemContext(level, enchantmentLevel, tool),
++            level,
++            enchantmentLevel,
++            tool,
+             enchantmentValueEffect -> value.setValue(enchantmentValueEffect.process(enchantmentLevel, level.getRandom(), value.floatValue()))
+         );
+     }
+@@ -420,9 +465,12 @@ public record Enchantment(Component description, Enchantment.EnchantmentDefiniti
+         Entity entity,
+         MutableFloat value
+     ) {
+-        applyEffects(
++        applyEntityEffects(
+             this.getEffects(component),
+-            entityContext(level, enchantmentLevel, entity, entity.position()),
++            level,
++            enchantmentLevel,
++            entity,
++            entity.position(),
+             enchantmentValueEffect -> value.setValue(enchantmentValueEffect.process(enchantmentLevel, entity.getRandom(), value.floatValue()))
+         );
+     }
+@@ -436,99 +484,100 @@ public record Enchantment(Component description, Enchantment.EnchantmentDefiniti
+         DamageSource damageSource,
+         MutableFloat value
+     ) {
+-        applyEffects(
++        applyDamageEffects(
+             this.getEffects(component),
+-            damageContext(level, enchantmentLevel, entity, damageSource),
++            level,
++            enchantmentLevel,
++            entity,
++            damageSource,
+             enchantmentValueEffect -> value.setValue(enchantmentValueEffect.process(enchantmentLevel, entity.getRandom(), value.floatValue()))
+         );
+     }
+ 
+     public static LootContext damageContext(ServerLevel level, int enchantmentLevel, Entity entity, DamageSource damageSource) {
+-        LootParams lootParams = new LootParams.Builder(level)
+-            .withParameter(LootContextParams.THIS_ENTITY, entity)
+-            .withParameter(LootContextParams.ENCHANTMENT_LEVEL, enchantmentLevel)
+-            .withParameter(LootContextParams.ORIGIN, entity.position())
+-            .withParameter(LootContextParams.DAMAGE_SOURCE, damageSource)
+-            .withOptionalParameter(LootContextParams.ATTACKING_ENTITY, damageSource.getEntity())
+-            .withOptionalParameter(LootContextParams.DIRECT_ATTACKING_ENTITY, damageSource.getDirectEntity())
+-            .create(LootContextParamSets.ENCHANTED_DAMAGE);
+-        return new LootContext.Builder(lootParams).create(Optional.empty());
++        return LootContext.leaf$createEnchantedDamage(level, entity, enchantmentLevel, damageSource);
+     }
+ 
+     private static LootContext itemContext(ServerLevel level, int enchantmentLevel, ItemStack tool) {
+-        LootParams lootParams = new LootParams.Builder(level)
+-            .withParameter(LootContextParams.TOOL, tool)
+-            .withParameter(LootContextParams.ENCHANTMENT_LEVEL, enchantmentLevel)
+-            .create(LootContextParamSets.ENCHANTED_ITEM);
+-        return new LootContext.Builder(lootParams).create(Optional.empty());
+-    }
+-
+-    private static LootContext locationContext(ServerLevel level, int enchantmentLevel, Entity entity, boolean enchantmentActive) {
+-        LootParams lootParams = new LootParams.Builder(level)
+-            .withParameter(LootContextParams.THIS_ENTITY, entity)
+-            .withParameter(LootContextParams.ENCHANTMENT_LEVEL, enchantmentLevel)
+-            .withParameter(LootContextParams.ORIGIN, entity.position())
+-            .withParameter(LootContextParams.ENCHANTMENT_ACTIVE, enchantmentActive)
+-            .create(LootContextParamSets.ENCHANTED_LOCATION);
+-        return new LootContext.Builder(lootParams).create(Optional.empty());
++        return LootContext.leaf$createEnchantedItem(level, tool, enchantmentLevel);
+     }
+ 
+     private static LootContext entityContext(ServerLevel level, int enchantmentLevel, Entity entity, Vec3 origin) {
+-        LootParams lootParams = new LootParams.Builder(level)
+-            .withParameter(LootContextParams.THIS_ENTITY, entity)
+-            .withParameter(LootContextParams.ENCHANTMENT_LEVEL, enchantmentLevel)
+-            .withParameter(LootContextParams.ORIGIN, origin)
+-            .create(LootContextParamSets.ENCHANTED_ENTITY);
+-        return new LootContext.Builder(lootParams).create(Optional.empty());
++        return LootContext.leaf$createEnchantedEntity(level, entity, enchantmentLevel, origin);
+     }
+ 
+     private static LootContext blockHitContext(ServerLevel level, int enchantmentLevel, Entity entity, Vec3 origin, BlockState state) {
+-        LootParams lootParams = new LootParams.Builder(level)
+-            .withParameter(LootContextParams.THIS_ENTITY, entity)
+-            .withParameter(LootContextParams.ENCHANTMENT_LEVEL, enchantmentLevel)
+-            .withParameter(LootContextParams.ORIGIN, origin)
+-            .withParameter(LootContextParams.BLOCK_STATE, state)
+-            .create(LootContextParamSets.HIT_BLOCK);
+-        return new LootContext.Builder(lootParams).create(Optional.empty());
+-    }
+-
+-    private static <T> void applyEffects(List<ConditionalEffect<T>> effects, LootContext context, Consumer<T> applier) {
+-        for (ConditionalEffect<T> conditionalEffect : effects) {
+-            if (conditionalEffect.matches(context)) {
+-                applier.accept(conditionalEffect.effect());
+-            }
+-        }
++        return LootContext.leaf$createHitBlock(level, entity, enchantmentLevel, origin, state);
+     }
+ 
+     public void runLocationChangedEffects(ServerLevel level, int enchantmentLevel, EnchantedItemInUse item, LivingEntity entity) {
+         EquipmentSlot equipmentSlot = item.inSlot();
++
+         if (equipmentSlot != null) {
+             Map<Enchantment, Set<EnchantmentLocationBasedEffect>> map = entity.activeLocationDependentEnchantments(equipmentSlot);
++
+             if (!this.matchingSlot(equipmentSlot)) {
+                 Set<EnchantmentLocationBasedEffect> set = map.remove(this);
++
+                 if (set != null) {
+                     set.forEach(effect -> effect.onDeactivated(item, entity, entity.position(), enchantmentLevel));
+                 }
+             } else {
+                 Set<EnchantmentLocationBasedEffect> set = map.get(this);
+ 
++                LootContext activeContext = null;
++
++                final Vec3 entityPos = entity.position();
++
++                LootContext inactiveContext = null;
++
+                 for (ConditionalEffect<EnchantmentLocationBasedEffect> conditionalEffect : this.getEffects(EnchantmentEffectComponents.LOCATION_CHANGED)) {
+                     EnchantmentLocationBasedEffect enchantmentLocationBasedEffect = conditionalEffect.effect();
+                     boolean flag = set != null && set.contains(enchantmentLocationBasedEffect);
+-                    if (conditionalEffect.matches(locationContext(level, enchantmentLevel, entity, flag))) {
+-                        if (!flag) {
+-                            if (set == null) {
+-                                set = new ObjectArraySet<>();
+-                                map.put(this, set);
++
++                    final Optional<LootItemCondition> requirements = conditionalEffect.requirements();
++
++                    if (requirements.isPresent()) {
++                        LootContext context;
++
++                        if (flag) {
++                            if (activeContext == null) {
++                                activeContext = LootContext.leaf$createEnchantedLocation(
++                                    level, entity, enchantmentLevel, entityPos, true
++                                );
++                            }
++
++                            context = activeContext;
++                        } else {
++                            if (inactiveContext == null) {
++                                inactiveContext = LootContext.leaf$createEnchantedLocation(
++                                    level, entity, enchantmentLevel, entityPos, false
++                                );
+                             }
+ 
+-                            set.add(enchantmentLocationBasedEffect);
++                            context = inactiveContext;
++                        }
++
++                        if (!requirements.get().test(context)) {
++                            if (set != null && set.remove(enchantmentLocationBasedEffect)) {
++                                enchantmentLocationBasedEffect.onDeactivated(item, entity, entityPos, enchantmentLevel);
++                            }
++
++                            continue;
++                        }
++                    }
++
++                    if (!flag) {
++                        if (set == null) {
++                            set = new ObjectArraySet<>();
++
++                            map.put(this, set);
+                         }
+ 
+-                        enchantmentLocationBasedEffect.onChangedBlock(level, enchantmentLevel, item, entity, entity.position(), !flag);
+-                    } else if (set != null && set.remove(enchantmentLocationBasedEffect)) {
+-                        enchantmentLocationBasedEffect.onDeactivated(item, entity, entity.position(), enchantmentLevel);
++                        set.add(enchantmentLocationBasedEffect);
+                     }
++
++                    enchantmentLocationBasedEffect.onChangedBlock(level, enchantmentLevel, item, entity, entityPos, !flag);
+                 }
+ 
+                 if (set != null && set.isEmpty()) {
+@@ -538,6 +587,114 @@ public record Enchantment(Component description, Enchantment.EnchantmentDefiniti
+         }
+     }
+ 
++    private static <T> void applyItemEffects(
++        final List<ConditionalEffect<T>> effects,
++        final ServerLevel level,
++        final int enchantmentLevel,
++        final ItemStack tool,
++        final Consumer<T> applier
++    ) {
++        LootContext context = null;
++
++        for (final ConditionalEffect<T> effect : effects) {
++            final Optional<LootItemCondition> requirements = effect.requirements();
++
++            if (requirements.isPresent()) {
++                if (context == null) {
++                    context = itemContext(level, enchantmentLevel, tool);
++                }
++
++                if (!requirements.get().test(context)) {
++                    continue;
++                }
++            }
++
++            applier.accept(effect.effect());
++        }
++    }
++
++    private static <T> void applyEntityEffects(
++        final List<ConditionalEffect<T>> effects,
++        final ServerLevel level,
++        final int enchantmentLevel,
++        final Entity entity,
++        final Vec3 origin,
++        final Consumer<T> applier
++    ) {
++        LootContext context = null;
++
++        for (final ConditionalEffect<T> effect : effects) {
++            final Optional<LootItemCondition> requirements = effect.requirements();
++
++            if (requirements.isPresent()) {
++                if (context == null) {
++                    context = entityContext(level, enchantmentLevel, entity, origin);
++                }
++
++                if (!requirements.get().test(context)) {
++                    continue;
++                }
++            }
++
++            applier.accept(effect.effect());
++        }
++    }
++
++    private static <T> void applyDamageEffects(
++        final List<ConditionalEffect<T>> effects,
++        final ServerLevel level,
++        final int enchantmentLevel,
++        final Entity entity,
++        final DamageSource damageSource,
++        final Consumer<T> applier
++    ) {
++        LootContext context = null;
++
++        for (final ConditionalEffect<T> effect : effects) {
++            final Optional<LootItemCondition> requirements = effect.requirements();
++
++            if (requirements.isPresent()) {
++                if (context == null) {
++                    context = damageContext(level, enchantmentLevel, entity, damageSource);
++                }
++
++                if (!requirements.get().test(context)) {
++                    continue;
++                }
++            }
++
++            applier.accept(effect.effect());
++        }
++    }
++
++    private static <T> void applyHitEffects(
++        final List<ConditionalEffect<T>> effects,
++        final ServerLevel level,
++        final int enchantmentLevel,
++        final Entity entity,
++        final Vec3 origin,
++        final BlockState state,
++        final Consumer<T> applier
++    ) {
++        LootContext context = null;
++
++        for (final ConditionalEffect<T> effect : effects) {
++            final Optional<LootItemCondition> requirements = effect.requirements();
++
++            if (requirements.isPresent()) {
++                if (context == null) {
++                    context = blockHitContext(level, enchantmentLevel, entity, origin, state);
++                }
++
++                if (!requirements.get().test(context)) {
++                    continue;
++                }
++            }
++
++            applier.accept(effect.effect());
++        }
++    }
++
+     public void stopLocationBasedEffects(int enchantmentLevel, EnchantedItemInUse item, LivingEntity entity) {
+         EquipmentSlot equipmentSlot = item.inSlot();
+         if (equipmentSlot != null) {
+diff --git a/net/minecraft/world/item/enchantment/EnchantmentHelper.java b/net/minecraft/world/item/enchantment/EnchantmentHelper.java
+index a8924fbfc12a3a019d6dc3e61f265031471016b3..cff22215b0c01794bb723ec51f7eb4f8c430048a 100644
+--- a/net/minecraft/world/item/enchantment/EnchantmentHelper.java
++++ b/net/minecraft/world/item/enchantment/EnchantmentHelper.java
+@@ -11,6 +11,7 @@ import java.util.function.BiConsumer;
+ import java.util.function.Consumer;
+ import java.util.function.Predicate;
+ import java.util.stream.Stream;
++import it.unimi.dsi.fastutil.objects.ObjectArrayList;
+ import net.minecraft.core.Holder;
+ import net.minecraft.core.HolderSet;
+ import net.minecraft.core.RegistryAccess;
+@@ -270,6 +271,7 @@ public class EnchantmentHelper {
+         runIterationOnItem(stack, slot, entity, (enchantment, level, item) -> enchantment.value().stopLocationBasedEffects(level, item, entity));
+     }
+ 
++    @SuppressWarnings("unchecked")
+     public static void tickEffects(ServerLevel level, LivingEntity entity) {
+         for (final EquipmentSlot slot : EquipmentSlot.VALUES_ARRAY) { // Gale - JettPack - reduce array allocations
+             final ItemStack stack = entity.getItemBySlot(slot);
+@@ -284,20 +286,24 @@ public class EnchantmentHelper {
+                 continue;
+             }
+ 
++            final ObjectArrayList<Entry<Holder<Enchantment>>> ticking = enchantments.tickingEntries(slot);
++
++            if (ticking.isEmpty()) {
++                continue;
++            }
++
+             EnchantedItemInUse item = null;
+ 
+-            for (final Entry<Holder<Enchantment>> entry : enchantments.leaf$entrySet()) { // Leaf - reduce enchantment allocations
+-                final Enchantment value = entry.getKey().value();
++            final Object[] elements = ticking.elements();
+ 
+-                if (!value.effects().has(EnchantmentEffectComponents.TICK) || !value.matchingSlot(slot)) {
+-                    continue;
+-                }
++            for (int i = 0, len = ticking.size(); i < len; ++i) {
++                final Entry<Holder<Enchantment>> entry = (Entry<Holder<Enchantment>>) elements[i];
+ 
+                 if (item == null) {
+                     item = new EnchantedItemInUse(stack, slot, entity);
+                 }
+ 
+-                value.tick(level, entry.getIntValue(), item, entity);
++                entry.getKey().value().tick(level, entry.getIntValue(), item, entity);
+             }
+         }
+     }
+diff --git a/net/minecraft/world/item/enchantment/ItemEnchantments.java b/net/minecraft/world/item/enchantment/ItemEnchantments.java
+index 5de7356f0375f9acf772ef457c477de0539fd092..241604bf086b425940272bbddacdaf88fe10c792 100644
+--- a/net/minecraft/world/item/enchantment/ItemEnchantments.java
++++ b/net/minecraft/world/item/enchantment/ItemEnchantments.java
+@@ -1,10 +1,9 @@
+ package net.minecraft.world.item.enchantment;
+ 
+ import com.mojang.serialization.Codec;
+-import it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap;
+ import it.unimi.dsi.fastutil.objects.Object2IntMap.Entry;
++import it.unimi.dsi.fastutil.objects.ObjectArrayList;
+ import java.util.Collections;
+-import java.util.Map;
+ import java.util.Optional;
+ import java.util.Set;
+ import java.util.function.Consumer;
+@@ -25,7 +24,7 @@ import net.minecraft.tags.TagKey;
+ import net.minecraft.world.item.Item;
+ import net.minecraft.world.item.TooltipFlag;
+ import net.minecraft.world.item.component.TooltipProvider;
+-import org.jspecify.annotations.Nullable;
++import org.jetbrains.annotations.Nullable;
+ 
+ public class ItemEnchantments implements TooltipProvider {
+     // Paper start - sort enchantments
+@@ -45,6 +44,8 @@ public class ItemEnchantments implements TooltipProvider {
+     );
+     final it.unimi.dsi.fastutil.objects.Object2IntAVLTreeMap<Holder<Enchantment>> enchantments; // Paper
+ 
++    private transient @Nullable ObjectArrayList<Entry<Holder<Enchantment>>> @Nullable [] leaf$tickingBySlot;
++
+     ItemEnchantments(it.unimi.dsi.fastutil.objects.Object2IntAVLTreeMap<Holder<Enchantment>> enchantments) { // Paper
+         this.enchantments = enchantments;
+ 
+@@ -105,6 +106,43 @@ public class ItemEnchantments implements TooltipProvider {
+     }
+     // Leaf end - reduce enchantment allocations
+ 
++    // Leaf start - cache slot-specific ticking enchantments
++    @SuppressWarnings("unchecked")
++    public ObjectArrayList<Entry<Holder<Enchantment>>> tickingEntries(final net.minecraft.world.entity.EquipmentSlot slot) {
++        @Nullable ObjectArrayList<Entry<Holder<Enchantment>>> @Nullable [] tickingEntriesBySlot = leaf$tickingBySlot;
++
++        if (tickingEntriesBySlot == null) {
++            tickingEntriesBySlot = new ObjectArrayList[net.minecraft.world.entity.EquipmentSlot.VALUES_ARRAY.length];
++
++            leaf$tickingBySlot = tickingEntriesBySlot;
++        }
++
++        final int slotIndex = slot.ordinal();
++
++        ObjectArrayList<Entry<Holder<Enchantment>>> tickingEntries = tickingEntriesBySlot[slotIndex];
++
++        if (tickingEntries != null) {
++            return tickingEntries;
++        }
++
++        tickingEntries = new ObjectArrayList<>();
++
++        for (final Entry<Holder<Enchantment>> entry : this.enchantments.object2IntEntrySet()) {
++            final Enchantment enchantment = entry.getKey().value();
++
++            if (!enchantment.effects().has(EnchantmentEffectComponents.TICK) || !enchantment.matchingSlot(slot)) {
++                continue;
++            }
++
++            tickingEntries.add(entry);
++        }
++
++        tickingEntriesBySlot[slotIndex] = tickingEntries;
++
++        return tickingEntries;
++    }
++    // Leaf end - cache slot-specific ticking enchantments
++
+     public int size() {
+         return this.enchantments.size();
+     }
+diff --git a/net/minecraft/world/item/enchantment/TargetedConditionalEffect.java b/net/minecraft/world/item/enchantment/TargetedConditionalEffect.java
+index 015fdfba19be11cefc7aaf585cc177d632e6a7f5..598eb0c889ec872da442519db0218ba157bf66cf 100644
+--- a/net/minecraft/world/item/enchantment/TargetedConditionalEffect.java
++++ b/net/minecraft/world/item/enchantment/TargetedConditionalEffect.java
+@@ -47,6 +47,8 @@ public record TargetedConditionalEffect<T>(EnchantmentTarget enchanted, Enchantm
+     }
+ 
+     public boolean matches(LootContext context) {
+-        return this.requirements.isEmpty() || this.requirements.get().test(context);
++        final Optional<LootItemCondition> requirements = this.requirements;
++
++        return requirements.isEmpty() || requirements.get().test(context);
+     }
+ }
+diff --git a/net/minecraft/world/level/storage/loot/LootContext.java b/net/minecraft/world/level/storage/loot/LootContext.java
+index f26f38983a34e4493017c14c3294761a67b0c3e0..506429056615799b028e4be4f728258c4fb9b1b9 100644
+--- a/net/minecraft/world/level/storage/loot/LootContext.java
++++ b/net/minecraft/world/level/storage/loot/LootContext.java
+@@ -1,6 +1,8 @@
+ package net.minecraft.world.level.storage.loot;
+ 
+ import com.google.common.collect.Sets;
++import java.util.IdentityHashMap;
++import java.util.Map;
+ import java.util.Optional;
+ import java.util.Set;
+ import java.util.function.Consumer;
+@@ -11,12 +13,18 @@ import net.minecraft.server.level.ServerLevel;
+ import net.minecraft.util.RandomSource;
+ import net.minecraft.util.StringRepresentable;
+ import net.minecraft.util.context.ContextKey;
++import net.minecraft.util.context.ContextKeySet;
++import net.minecraft.util.context.ContextMap;
++import net.minecraft.world.damagesource.DamageSource;
+ import net.minecraft.world.entity.Entity;
+ import net.minecraft.world.item.ItemStack;
++import net.minecraft.world.level.block.state.BlockState;
+ import net.minecraft.world.level.block.entity.BlockEntity;
+ import net.minecraft.world.level.storage.loot.functions.LootItemFunction;
++import net.minecraft.world.level.storage.loot.parameters.LootContextParamSets;
+ import net.minecraft.world.level.storage.loot.parameters.LootContextParams;
+ import net.minecraft.world.level.storage.loot.predicates.LootItemCondition;
++import net.minecraft.world.phys.Vec3;
+ import org.jspecify.annotations.Nullable;
+ 
+ public class LootContext {
+@@ -87,6 +95,110 @@ public class LootContext {
+         return new LootContext.VisitedEntry<>(LootDataType.MODIFIER, modifier);
+     }
+ 
++    private static LootContext leaf$create(
++        final ServerLevel level, final IdentityHashMap<ContextKey<?>, Object> params, final ContextKeySet set
++    ) {
++        final Set<ContextKey<?>> keys = params.keySet();
++
++        if (!set.allowed().containsAll(keys)) {
++            throw new IllegalArgumentException("Unexpected loot context parameters for " + set);
++        }
++
++        if (!keys.containsAll(set.required())) {
++            throw new IllegalArgumentException("Missing required loot context parameters for " + set);
++        }
++
++        final LootParams loot = new LootParams(level, ContextMap.leaf$createUncheckedMap(params), Map.of(), 0.0F);
++
++        return new LootContext(loot, level.getRandom(), level.getServer().reloadableRegistries().lookup());
++    }
++
++    public static LootContext leaf$createEnchantedEntity(
++        final ServerLevel level,
++        final Entity entity,
++        final int enchantmentLevel,
++        final Vec3 origin
++    ) {
++        final IdentityHashMap<ContextKey<?>, Object> params = new IdentityHashMap<>(3);
++
++        params.put(LootContextParams.THIS_ENTITY, entity);
++        params.put(LootContextParams.ENCHANTMENT_LEVEL, enchantmentLevel);
++        params.put(LootContextParams.ORIGIN, origin);
++
++        return leaf$create(level, params, LootContextParamSets.ENCHANTED_ENTITY);
++    }
++
++    public static LootContext leaf$createEnchantedLocation(
++        final ServerLevel level,
++        final Entity entity,
++        final int enchantmentLevel,
++        final Vec3 origin,
++        final boolean enchantmentActive
++    ) {
++        final IdentityHashMap<ContextKey<?>, Object> params = new IdentityHashMap<>(4);
++
++        params.put(LootContextParams.THIS_ENTITY, entity);
++        params.put(LootContextParams.ENCHANTMENT_LEVEL, enchantmentLevel);
++        params.put(LootContextParams.ORIGIN, origin);
++        params.put(LootContextParams.ENCHANTMENT_ACTIVE, enchantmentActive);
++
++        return leaf$create(level, params, LootContextParamSets.ENCHANTED_LOCATION);
++    }
++
++    public static LootContext leaf$createEnchantedItem(final ServerLevel level, final ItemStack tool, final int enchantmentLevel) {
++        final IdentityHashMap<ContextKey<?>, Object> params = new IdentityHashMap<>(2);
++
++        params.put(LootContextParams.TOOL, tool);
++        params.put(LootContextParams.ENCHANTMENT_LEVEL, enchantmentLevel);
++
++        return leaf$create(level, params, LootContextParamSets.ENCHANTED_ITEM);
++    }
++
++    public static LootContext leaf$createEnchantedDamage(
++        final ServerLevel level,
++        final Entity entity,
++        final int enchantmentLevel,
++        final DamageSource damageSource
++    ) {
++        final IdentityHashMap<ContextKey<?>, Object> params = new IdentityHashMap<>(6);
++
++        params.put(LootContextParams.THIS_ENTITY, entity);
++        params.put(LootContextParams.ENCHANTMENT_LEVEL, enchantmentLevel);
++        params.put(LootContextParams.ORIGIN, entity.position());
++        params.put(LootContextParams.DAMAGE_SOURCE, damageSource);
++
++        final Entity attacking = damageSource.getEntity();
++
++        if (attacking != null) {
++            params.put(LootContextParams.ATTACKING_ENTITY, attacking);
++        }
++
++        final Entity direct = damageSource.getDirectEntity();
++
++        if (direct != null) {
++            params.put(LootContextParams.DIRECT_ATTACKING_ENTITY, direct);
++        }
++
++        return leaf$create(level, params, LootContextParamSets.ENCHANTED_DAMAGE);
++    }
++
++    public static LootContext leaf$createHitBlock(
++        final ServerLevel level,
++        final Entity entity,
++        final int enchantmentLevel,
++        final Vec3 origin,
++        final BlockState state
++    ) {
++        final IdentityHashMap<ContextKey<?>, Object> params = new IdentityHashMap<>(4);
++
++        params.put(LootContextParams.THIS_ENTITY, entity);
++        params.put(LootContextParams.ENCHANTMENT_LEVEL, enchantmentLevel);
++        params.put(LootContextParams.ORIGIN, origin);
++        params.put(LootContextParams.BLOCK_STATE, state);
++
++        return leaf$create(level, params, LootContextParamSets.HIT_BLOCK);
++    }
++
+     public static enum BlockEntityTarget implements StringRepresentable, LootContextArg.SimpleGetter<BlockEntity> {
+         BLOCK_ENTITY("block_entity", LootContextParams.BLOCK_ENTITY);
+ 
+diff --git a/net/minecraft/world/level/storage/loot/predicates/LootItemEntityPropertyCondition.java b/net/minecraft/world/level/storage/loot/predicates/LootItemEntityPropertyCondition.java
+index 86e269ceaf9397870fd9ed80abe1ef077f9307ef..3e5cb8cb91429ffaa8b5e36aaf8e43a06291fff5 100644
+--- a/net/minecraft/world/level/storage/loot/predicates/LootItemEntityPropertyCondition.java
++++ b/net/minecraft/world/level/storage/loot/predicates/LootItemEntityPropertyCondition.java
+@@ -32,9 +32,16 @@ public record LootItemEntityPropertyCondition(Optional<EntityPredicate> predicat
+ 
+     @Override
+     public boolean test(LootContext context) {
+-        Entity entity = context.getOptionalParameter(this.entityTarget.contextParam());
+-        Vec3 vec3 = context.getOptionalParameter(LootContextParams.ORIGIN);
+-        return this.predicate.isEmpty() || this.predicate.get().matches(context.getLevel(), vec3, entity);
++        final Optional<EntityPredicate> predicate = this.predicate;
++
++        if (predicate.isEmpty()) {
++            return true;
++        }
++
++        final Entity entity = context.getOptionalParameter(this.entityTarget.contextParam());
++        final Vec3 origin = context.getOptionalParameter(LootContextParams.ORIGIN);
++
++        return predicate.get().matches(context.getLevel(), origin, entity);
+     }
+ 
+     public static LootItemCondition.Builder entityPresent(LootContext.EntityTarget target) {
