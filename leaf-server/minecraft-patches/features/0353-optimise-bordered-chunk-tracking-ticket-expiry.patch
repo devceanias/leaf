@@ -1,0 +1,1020 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Sun, 10 May 2026 13:01:05 +1000
+Subject: [PATCH] optimise bordered chunk tracking + ticket expiry
+
+
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/player/RegionizedPlayerChunkLoader.java b/ca/spottedleaf/moonrise/patches/chunk_system/player/RegionizedPlayerChunkLoader.java
+index b6f5bbdf2b421d0c2a4c20abb892113440707ab3..382fcf108a9276d3edc592302aa2e88253455605 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/player/RegionizedPlayerChunkLoader.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/player/RegionizedPlayerChunkLoader.java
+@@ -21,6 +21,7 @@ import it.unimi.dsi.fastutil.longs.Long2ByteOpenHashMap;
+ import it.unimi.dsi.fastutil.longs.LongArrayList;
+ import it.unimi.dsi.fastutil.longs.LongComparator;
+ import it.unimi.dsi.fastutil.longs.LongHeapPriorityQueue;
++import it.unimi.dsi.fastutil.longs.LongIterator;
+ import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+ import net.minecraft.network.protocol.Packet;
+ import net.minecraft.network.protocol.game.ClientboundForgetLevelChunkPacket;
+@@ -321,6 +322,18 @@ public final class RegionizedPlayerChunkLoader {
+     }
+ 
+     public static final class PlayerChunkLoaderData {
++        private record BorderTrackState(
++            boolean enabled,
++            int minChunkX,
++            int maxChunkX,
++            int minChunkZ,
++            int maxChunkZ
++        ) {
++            private static final BorderTrackState DISABLED = new BorderTrackState(
++                false, Integer.MIN_VALUE, Integer.MAX_VALUE, Integer.MIN_VALUE, Integer.MAX_VALUE
++            );
++        }
++
+         @FunctionalInterface
+         private interface RemoveCallback {
+             void remove(PlayerChunkLoaderData parameter, int chunkX, int chunkZ);
+@@ -401,19 +414,15 @@ public final class RegionizedPlayerChunkLoader {
+         private final LongHeapPriorityQueue loadingQueue = new LongHeapPriorityQueue(CLOSEST_MANHATTAN_DIST);
+         private final LongHeapPriorityQueue loadQueue = new LongHeapPriorityQueue(CLOSEST_MANHATTAN_DIST);
+ 
+-        private boolean trackByWorldBorder;
+-
+-        private int trackMinChunkX = Integer.MIN_VALUE;
+-        private int trackMaxChunkX = Integer.MAX_VALUE;
+-        private int trackMinChunkZ = Integer.MIN_VALUE;
+-        private int trackMaxChunkZ = Integer.MAX_VALUE;
+-
+         private final Long2ByteOpenHashMap sendChunkCache = new Long2ByteOpenHashMap();
+         private final Long2ByteOpenHashMap tickChunkCache = new Long2ByteOpenHashMap();
+ 
+         private final Long2ByteOpenHashMap sendNeighbourCache = new Long2ByteOpenHashMap();
+         private final Long2ByteOpenHashMap tickNeighbourCache = new Long2ByteOpenHashMap();
+ 
++        private BorderTrackState currentBorderTrackState = BorderTrackState.DISABLED;
++        private BorderTrackState lastBorderTrackState = BorderTrackState.DISABLED;
++
+         {
+             sendChunkCache.defaultReturnValue((byte) 0);
+             tickChunkCache.defaultReturnValue((byte) 0);
+@@ -713,22 +722,22 @@ public final class RegionizedPlayerChunkLoader {
+             return configLimit;
+         }
+ 
+-        private void refreshBorderTrackBounds() {
++        private BorderTrackState refreshBorderTrackState() {
+             final boolean track = world.galeConfig().smallOptimizations.loadChunks.preventTrackingOutsideWorldBorder;
+ 
+             if (!track) {
+-                trackByWorldBorder = false;
+-
+-                return;
++                return currentBorderTrackState = BorderTrackState.DISABLED;
+             }
+ 
+             final WorldBorder border = world.getWorldBorder();
+ 
+-            trackByWorldBorder = true;
+-            trackMinChunkX = Mth.floor(border.getMinX()) >> 4;
+-            trackMaxChunkX = (Mth.ceil(border.getMaxX()) - 1) >> 4;
+-            trackMinChunkZ = Mth.floor(border.getMinZ()) >> 4;
+-            trackMaxChunkZ = (Mth.ceil(border.getMaxZ()) - 1) >> 4;
++            return currentBorderTrackState = new BorderTrackState(
++                true,
++                Mth.floor(border.getMinX()) >> 4,
++                (Mth.ceil(border.getMaxX()) - 1) >> 4,
++                Mth.floor(border.getMinZ()) >> 4,
++                (Mth.ceil(border.getMaxZ()) - 1) >> 4
++            );
+         }
+ 
+         private void clearChunkViewCaches() {
+@@ -775,11 +784,13 @@ public final class RegionizedPlayerChunkLoader {
+         }
+ 
+         private boolean shouldTrackChunk(final int chunkX, final int chunkZ) {
+-            return !trackByWorldBorder || (
+-                chunkX >= trackMinChunkX - 1 &&
+-                chunkX <= trackMaxChunkX + 1 &&
+-                chunkZ >= trackMinChunkZ - 1 &&
+-                chunkZ <= trackMaxChunkZ + 1
++            final BorderTrackState borderTrackState = this.currentBorderTrackState;
++
++            return !borderTrackState.enabled() || (
++                chunkX >= borderTrackState.minChunkX() - 1 &&
++                chunkX <= borderTrackState.maxChunkX() + 1 &&
++                chunkZ >= borderTrackState.minChunkZ() - 1 &&
++                chunkZ <= borderTrackState.maxChunkZ() + 1
+             );
+         }
+ 
+@@ -822,13 +833,104 @@ public final class RegionizedPlayerChunkLoader {
+             return generated;
+         }
+ 
++        private void processCandidateChunk(final int chunkX, final int chunkZ, final boolean canGenerate) {
++            final long chunkKey = CoordinateUtils.getChunkKey(chunkX, chunkZ);
++
++            final boolean sendChunk = wantChunkSent(chunkX, chunkZ);
++            final boolean sentChunk = sendChunk ? sentChunks.contains(chunkKey) : sentChunks.remove(chunkKey);
++            final boolean tickChunk = wantChunkTicked(chunkX, chunkZ);
++
++            if (!sendChunk && sentChunk) {
++                sendUnloadChunkRaw(chunkX, chunkZ);
++            }
++
++            final byte ticketStage = chunkTicketStage.get(chunkKey);
++
++            switch (ticketStage) {
++                case CHUNK_TICKET_STAGE_NONE: {
++                    loadQueue.enqueue(chunkKey);
++
++                    break;
++                }
++                case CHUNK_TICKET_STAGE_LOADING: {
++                    loadingQueue.enqueue(chunkKey);
++
++                    break;
++                }
++                case CHUNK_TICKET_STAGE_LOADED: {
++                    if (canGenerate || isLoadedChunkGeneratable(chunkX, chunkZ)) {
++                        genQueue.enqueue(chunkKey);
++                    }
++
++                    break;
++                }
++                case CHUNK_TICKET_STAGE_GENERATING: {
++                    generatingQueue.enqueue(chunkKey);
++
++                    break;
++                }
++                case CHUNK_TICKET_STAGE_GENERATED: {
++                    if (sendChunk && !sentChunk && (asyncSender == null || !asyncSender.contains(chunkKey))) {
++                        sendQueue.enqueue(chunkKey);
++                    }
++
++                    if (tickChunk) {
++                        tickingQueue.enqueue(chunkKey);
++                    }
++
++                    break;
++                }
++                case CHUNK_TICKET_STAGE_TICK: {
++                    if (sendChunk && !sentChunk && (asyncSender == null || !asyncSender.contains(chunkKey))) {
++                        sendQueue.enqueue(chunkKey);
++                    }
++
++                    break;
++                }
++                default: {
++                    throw new IllegalStateException("Unknown stage: " + ticketStage);
++                }
++            }
++        }
++
++        private void processCandidateChunkIfTracked(final int chunkX, final int chunkZ, final boolean canGenerateChunks) {
++            if (!shouldTrackChunk(chunkX, chunkZ)) {
++                sendUnloadChunk(chunkX, chunkZ);
++
++                return;
++            }
++
++            processCandidateChunk(chunkX, chunkZ, canGenerateChunks);
++        }
++
++        private void unloadSentChunksOutsideTrack() {
++            for (final LongIterator iterator = sentChunks.iterator(); iterator.hasNext();) {
++                final long currentChunk = iterator.nextLong();
++
++                final int chunkX = CoordinateUtils.getChunkX(currentChunk);
++                final int chunkZ = CoordinateUtils.getChunkZ(currentChunk);
++
++                if (shouldTrackChunk(chunkX, chunkZ)) {
++                    continue;
++                }
++
++                if (asyncSender != null) {
++                    asyncSender.remove(currentChunk);
++                }
++
++                iterator.remove();
++
++                sendUnloadChunkRaw(chunkX, chunkZ);
++            }
++        }
++
+         void updateQueues(final long time) {
+             TickThread.ensureTickThread(this.player, "Cannot tick player chunk loader async");
+             if (this.removed) {
+                 throw new IllegalStateException("Ticking removed player chunk loader");
+             }
+ 
+-            refreshBorderTrackBounds();
++            refreshBorderTrackState();
+ 
+             // update rate limits
+             final double loadRate = this.getMaxChunkLoadRate();
+@@ -1156,7 +1258,7 @@ public final class RegionizedPlayerChunkLoader {
+                 throw new IllegalStateException("Updating removed player chunk loader");
+             }
+ 
+-            refreshBorderTrackBounds();
++            final BorderTrackState borderState = refreshBorderTrackState();
+ 
+             final ViewDistances playerDistances = ((ChunkSystemServerPlayer)this.player).moonrise$getViewDistanceHolder().getViewDistances();
+             final ViewDistances worldDistances = ((ChunkSystemServerLevel)this.world).moonrise$getViewDistanceHolder().getViewDistances();
+@@ -1180,6 +1282,8 @@ public final class RegionizedPlayerChunkLoader {
+             final int prevChunkX = this.lastChunkX;
+             final int prevChunkZ = this.lastChunkZ;
+ 
++            final boolean borderTrackingUnchanged = lastBorderTrackState.equals(borderState);
++
+             final boolean teleported = prevChunkX != Integer.MIN_VALUE
+                 && prevChunkZ != Integer.MIN_VALUE
+                 && lastLoadDistance != Integer.MIN_VALUE
+@@ -1198,6 +1302,9 @@ public final class RegionizedPlayerChunkLoader {
+ 
+                     // can we still generate chunks?
+                     && this.canGenerateChunks == canGenerateChunks
++
++                    // has border tracking stayed the same?
++                    && borderTrackingUnchanged
+             ) {
+                 // nothing we care about changed, so we're not re-calculating
+                 return;
+@@ -1240,83 +1347,67 @@ public final class RegionizedPlayerChunkLoader {
+             this.lastLoadDistance = loadViewDistance;
+             this.lastTickDistance = tickViewDistance;
+             this.canGenerateChunks = canGenerateChunks;
++            this.lastBorderTrackState = borderState;
+ 
+             clearChunkViewCaches();
+ 
+             // +1 since we need to load chunks +1 around the load view distance...
+-            final long[] toIterate = ParallelSearchRadiusIteration.getSearchIteration(loadViewDistance + 1);
+-
+-            // the iteration order is by increasing manhattan distance - so, we do NOT need to
+-            // sort anything in the queue!
+-            for (final long deltaChunk : toIterate) {
+-                final int dx = CoordinateUtils.getChunkX(deltaChunk);
+-                final int dz = CoordinateUtils.getChunkZ(deltaChunk);
+-                final int chunkX = dx + currentChunkX;
+-                final int chunkZ = dz + currentChunkZ;
+-                final long chunk = CoordinateUtils.getChunkKey(chunkX, chunkZ);
+-                final int squareDistance = Math.max(Math.abs(dx), Math.abs(dz));
+-
+-                if (!shouldTrackChunk(chunkX, chunkZ)) {
+-                    final boolean sent = this.sentChunks.remove(chunk);
+-
+-                    if (sent) {
+-                        sendUnloadChunkRaw(chunkX, chunkZ);
+-                    }
+-
+-                    continue;
+-                }
+-
+-                final boolean sendChunk = wantChunkSent(chunkX, chunkZ);
+-                final boolean sentChunk = sendChunk ? this.sentChunks.contains(chunk) : this.sentChunks.remove(chunk);
+-                final boolean tickChunk = wantChunkTicked(chunkX, chunkZ);
+-
+-                if (!sendChunk && sentChunk) {
+-                    // have sent the chunk, but don't want it anymore
+-                    // unload it now
+-                    this.sendUnloadChunkRaw(chunkX, chunkZ);
+-                }
+-
+-                final byte stage = this.chunkTicketStage.get(chunk);
+-
+-                switch (stage) {
+-                    case CHUNK_TICKET_STAGE_NONE: {
+-                        // we want the chunk to be at least loaded
+-                        this.loadQueue.enqueue(chunk);
+-                        break;
+-                    }
+-                    case CHUNK_TICKET_STAGE_LOADING: {
+-                        this.loadingQueue.enqueue(chunk);
+-                        break;
+-                    }
+-                    case CHUNK_TICKET_STAGE_LOADED: {
+-                        if (canGenerateChunks || this.isLoadedChunkGeneratable(chunkX, chunkZ)) {
+-                            this.genQueue.enqueue(chunk);
+-                        }
+-                        break;
+-                    }
+-                    case CHUNK_TICKET_STAGE_GENERATING: {
+-                        this.generatingQueue.enqueue(chunk);
+-                        break;
+-                    }
+-                    case CHUNK_TICKET_STAGE_GENERATED: {
+-                        if (sendChunk && !sentChunk && (this.asyncSender == null || !this.asyncSender.contains(chunk))) { // Leaf - async chunk sender
+-                            this.sendQueue.enqueue(chunk);
++            final int iterationDistance = loadViewDistance + 1;
++
++            final int minChunkX = currentChunkX - iterationDistance;
++            final int maxChunkX = currentChunkX + iterationDistance;
++            final int minChunkZ = currentChunkZ - iterationDistance;
++            final int maxChunkZ = currentChunkZ + iterationDistance;
++
++            if (borderState.enabled()) {
++                final int clampedMinChunkX = Math.max(minChunkX, borderState.minChunkX() - 1);
++                final int clampedMaxChunkX = Math.min(maxChunkX, borderState.maxChunkX() + 1);
++                final int clampedMinChunkZ = Math.max(minChunkZ, borderState.minChunkZ() - 1);
++                final int clampedMaxChunkZ = Math.min(maxChunkZ, borderState.maxChunkZ() + 1);
++
++                if (clampedMinChunkX != minChunkX ||
++                    clampedMaxChunkX != maxChunkX ||
++                    clampedMinChunkZ != minChunkZ ||
++                    clampedMaxChunkZ != maxChunkZ
++                ) {
++                    unloadSentChunksOutsideTrack();
++
++                    for (int chunkX = clampedMinChunkX; chunkX <= clampedMaxChunkX; ++chunkX) {
++                        final int dx = chunkX - currentChunkX;
++
++                        for (int chunkZ = clampedMinChunkZ; chunkZ <= clampedMaxChunkZ; ++chunkZ) {
++                            if (Math.max(Math.abs(dx), Math.abs(chunkZ - currentChunkZ)) > iterationDistance) {
++                                continue;
++                            }
++
++                            processCandidateChunk(chunkX, chunkZ, canGenerateChunks);
+                         }
+-                        if (tickChunk) {
+-                            this.tickingQueue.enqueue(chunk);
+-                        }
+-                        break;
+                     }
+-                    case CHUNK_TICKET_STAGE_TICK: {
+-                        if (sendChunk && !sentChunk && (this.asyncSender == null || !this.asyncSender.contains(chunk))) { // Leaf - async chunk sender
+-                            this.sendQueue.enqueue(chunk);
+-                        }
+-                        break;
+-                    }
+-                    default: {
+-                        throw new IllegalStateException("Unknown stage: " + stage);
++                } else {
++                    final long[] toIterate = ParallelSearchRadiusIteration.getSearchIteration(iterationDistance);
++
++                    // the iteration order is by increasing manhattan distance - so, we do NOT need to
++                    // sort anything in the queue!
++                    for (final long deltaChunk : toIterate) {
++                        processCandidateChunkIfTracked(
++                            CoordinateUtils.getChunkX(deltaChunk) + currentChunkX,
++                            CoordinateUtils.getChunkZ(deltaChunk) + currentChunkZ,
++                            canGenerateChunks
++                        );
+                     }
+                 }
++            } else {
++                final long[] toIterate = ParallelSearchRadiusIteration.getSearchIteration(iterationDistance);
++
++                // the iteration order is by increasing manhattan distance - so, we do NOT need to
++                // sort anything in the queue!
++                for (final long deltaChunk : toIterate) {
++                    processCandidateChunkIfTracked(
++                        CoordinateUtils.getChunkX(deltaChunk) + currentChunkX,
++                        CoordinateUtils.getChunkZ(deltaChunk) + currentChunkZ,
++                        canGenerateChunks
++                    );
++                }
+             }
+ 
+             // update the chunk center
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java
+index 7b3bc0a020db6006b8ce728bcf07576c5b293476..7824d3277008830a95d65d2382788942feb0173f 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java
+@@ -19,15 +19,14 @@ import ca.spottedleaf.moonrise.patches.chunk_system.scheduling.task.ChunkProgres
+ import ca.spottedleaf.moonrise.patches.chunk_system.scheduling.task.GenericDataLoadTask;
+ import ca.spottedleaf.moonrise.patches.chunk_system.ticket.ChunkSystemTicket;
+ import ca.spottedleaf.moonrise.patches.chunk_system.ticket.ChunkSystemTicketType;
+-import ca.spottedleaf.moonrise.patches.chunk_system.util.ChunkSystemSortedArraySet;
+ import ca.spottedleaf.moonrise.patches.chunk_system.util.stream.TicketSet;
+ import com.google.gson.JsonArray;
+ import com.google.gson.JsonObject;
+ import com.mojang.logging.LogUtils;
+ import it.unimi.dsi.fastutil.longs.Long2ByteLinkedOpenHashMap;
+ import it.unimi.dsi.fastutil.longs.Long2ByteMap;
+-import it.unimi.dsi.fastutil.longs.Long2IntMap;
+-import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
++import it.unimi.dsi.fastutil.longs.Long2LongMap;
++import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
+ import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
+ import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+ import it.unimi.dsi.fastutil.longs.LongArrayList;
+@@ -40,7 +39,6 @@ import net.minecraft.server.level.FullChunkStatus;
+ import net.minecraft.server.level.ServerLevel;
+ import net.minecraft.server.level.Ticket;
+ import net.minecraft.server.level.TicketType;
+-import net.minecraft.util.SortedArraySet;
+ import net.minecraft.world.level.ChunkPos;
+ import net.minecraft.world.level.chunk.LevelChunk;
+ import net.minecraft.world.level.chunk.status.ChunkStatus;
+@@ -60,7 +58,6 @@ import java.util.concurrent.TimeUnit;
+ import java.util.concurrent.atomic.AtomicBoolean;
+ import java.util.concurrent.atomic.AtomicReference;
+ import java.util.concurrent.locks.LockSupport;
+-import java.util.function.Predicate;
+ 
+ public final class ChunkHolderManager {
+ 
+@@ -74,10 +71,15 @@ public final class ChunkHolderManager {
+     public static final TicketType UNLOAD_COOLDOWN = ChunkSystemTicketType.create("chunk_system:unload_cooldown", null, 5L * 20L);
+ 
+     private static final long NO_TIMEOUT_MARKER = Long.MIN_VALUE;
++    private static final long NO_EXPIRE_TICK = Long.MAX_VALUE;
++
+     public final ReentrantAreaLock ticketLockArea;
+ 
+     private final ConcurrentLong2ReferenceChainedHashTable<TicketSet> tickets = new ConcurrentLong2ReferenceChainedHashTable<>();
+-    private final ConcurrentLong2ReferenceChainedHashTable<Long2IntOpenHashMap> sectionToChunkToExpireCount = new ConcurrentLong2ReferenceChainedHashTable<>();
++
++    private final ConcurrentLong2ReferenceChainedHashTable<Long2LongOpenHashMap> sectionToChunkExpiryTick = new ConcurrentLong2ReferenceChainedHashTable<>();
++    private final ConcurrentLong2ReferenceChainedHashTable<Long> sectionToNextExpiryTick = new ConcurrentLong2ReferenceChainedHashTable<>();
++
+     final ChunkUnloadQueue unloadQueue;
+ 
+     private final ConcurrentLong2ReferenceChainedHashTable<NewChunkHolder> chunkHolders = ConcurrentLong2ReferenceChainedHashTable.createWithCapacity(16384, 0.25f);
+@@ -568,7 +570,7 @@ public final class ChunkHolderManager {
+     }
+ 
+     private static int getTicketLevelAt(final TicketSet tickets) {
+-        return !tickets.isEmpty() ? tickets.first().getTicketLevel() : MAX_TICKET_LEVEL + 1;
++        return tickets.getMinTicketLevel();
+     }
+ 
+     public <T> boolean addTicketAtLevel(final TicketType type, final ChunkPos chunkPos, final int level,
+@@ -581,38 +583,74 @@ public final class ChunkHolderManager {
+         return this.addTicketAtLevel(type, CoordinateUtils.getChunkKey(chunkX, chunkZ), level, identifier);
+     }
+ 
+-    private void addExpireCount(final int chunkX, final int chunkZ) {
+-        final long chunkKey = CoordinateUtils.getChunkKey(chunkX, chunkZ);
++    private void updateExpireTick(final long chunkKey, final long nextExpireTick) {
++        final int chunkX = CoordinateUtils.getChunkX(chunkKey);
++        final int sectionShift = world.moonrise$getRegionChunkShift();
++        final int chunkZ = CoordinateUtils.getChunkZ(chunkKey);
+ 
+-        final int sectionShift = ((ChunkSystemServerLevel)this.world).moonrise$getRegionChunkShift();
+         final long sectionKey = CoordinateUtils.getChunkKey(
+             chunkX >> sectionShift,
+             chunkZ >> sectionShift
+         );
+ 
+-        this.sectionToChunkToExpireCount.computeIfAbsent(sectionKey, (final long keyInMap) -> {
+-            return new Long2IntOpenHashMap();
+-        }).addTo(chunkKey, 1);
+-    }
++        if (nextExpireTick == NO_EXPIRE_TICK) {
++            final Long2LongOpenHashMap sectionExpiries = sectionToChunkExpiryTick.get(sectionKey);
+ 
+-    private void removeExpireCount(final int chunkX, final int chunkZ) {
+-        final long chunkKey = CoordinateUtils.getChunkKey(chunkX, chunkZ);
++            if (sectionExpiries == null) {
++                return;
++            }
+ 
+-        final int sectionShift = ((ChunkSystemServerLevel)this.world).moonrise$getRegionChunkShift();
+-        final long sectionKey = CoordinateUtils.getChunkKey(
+-            chunkX >> sectionShift,
+-            chunkZ >> sectionShift
++            sectionExpiries.remove(chunkKey);
++
++            if (sectionExpiries.isEmpty()) {
++                sectionToChunkExpiryTick.remove(sectionKey);
++                sectionToNextExpiryTick.remove(sectionKey);
++
++                return;
++            }
++
++            recalculateExpireTick(sectionKey, sectionExpiries);
++
++            return;
++        }
++
++        final Long2LongOpenHashMap sectionExpiries = sectionToChunkExpiryTick.computeIfAbsent(
++            sectionKey, (final long keyInMap) -> new Long2LongOpenHashMap()
+         );
+ 
+-        final Long2IntOpenHashMap removeCounts = this.sectionToChunkToExpireCount.get(sectionKey);
+-        final int prevCount = removeCounts.addTo(chunkKey, -1);
++        sectionExpiries.put(chunkKey, nextExpireTick);
+ 
+-        if (prevCount == 1) {
+-            removeCounts.remove(chunkKey);
+-            if (removeCounts.isEmpty()) {
+-                this.sectionToChunkToExpireCount.remove(sectionKey);
++        final Long currentNext = sectionToNextExpiryTick.get(sectionKey);
++
++        if (currentNext == null || nextExpireTick < currentNext) {
++            sectionToNextExpiryTick.put(sectionKey, nextExpireTick);
++
++            return;
++        }
++
++        recalculateExpireTick(sectionKey, sectionExpiries);
++    }
++
++    private void recalculateExpireTick(final long sectionKey, final Long2LongOpenHashMap sectionExpiries) {
++        long nextExpire = NO_EXPIRE_TICK;
++
++        for (final Iterator<Long2LongMap.Entry> iterator = sectionExpiries.long2LongEntrySet().fastIterator(); iterator.hasNext();) {
++            final long expireTick = iterator.next().getLongValue();
++
++            if (expireTick >= nextExpire) {
++                continue;
+             }
++
++            nextExpire = expireTick;
++        }
++
++        if (nextExpire == NO_EXPIRE_TICK) {
++            sectionToNextExpiryTick.remove(sectionKey);
++
++            return;
+         }
++
++        sectionToNextExpiryTick.put(sectionKey, nextExpire);
+     }
+ 
+     // supposed to return true if the ticket was added and did not replace another
+@@ -621,8 +659,11 @@ public final class ChunkHolderManager {
+         return this.addTicketAtLevel(type, chunk, level, identifier, true);
+     }
+ 
++    @SuppressWarnings({ "unchecked", "rawtypes" })
+     <T> boolean addTicketAtLevel(final TicketType type, final long chunk, final int level, final T identifier, final boolean lock) {
+-        final long removeDelay = type.timeout() <= 0 ? NO_TIMEOUT_MARKER : type.timeout();
++        final long ticketTimeout = type.timeout();
++        final long removeDelay = ticketTimeout <= 0 ? NO_TIMEOUT_MARKER : (currentTick + ticketTimeout);
++
+         if (level > MAX_TICKET_LEVEL) {
+             return false;
+         }
+@@ -634,10 +675,13 @@ public final class ChunkHolderManager {
+             return false;
+         }
+ 
+-        final Ticket ticket = new Ticket(type, level, removeDelay);
+-        ((ChunkSystemTicket<T>)(Object)ticket).moonrise$setIdentifier(identifier);
++        final Ticket ticket = new Ticket(type, level, ticketTimeout <= 0 ? 0L : ticketTimeout);
++
++        ((ChunkSystemTicket<T>) ticket).moonrise$setIdentifier(identifier);
++        ((ChunkSystemTicket<T>) ticket).moonrise$setRemoveDelay(removeDelay);
+ 
+         final ReentrantAreaLock.Node ticketLock = lock ? this.ticketLockArea.lock(chunkX, chunkZ) : null;
++
+         try {
+             final TicketSet ticketsAtChunk = this.tickets.computeIfAbsent(chunk, (final long keyInMap) -> {
+                 return new TicketSet(4);
+@@ -646,22 +690,16 @@ public final class ChunkHolderManager {
+             final int levelBefore = getTicketLevelAt(ticketsAtChunk);
+             final Ticket current = ticketsAtChunk.replace(ticket);
+             final int levelAfter = getTicketLevelAt(ticketsAtChunk);
++            final long nextExpire = ticketsAtChunk.getNextExpireTick();
+ 
+-            if (current != ticket) {
+-                final long oldRemoveDelay = ((ChunkSystemTicket<T>)(Object)current).moonrise$getRemoveDelay();
+-                if (removeDelay != oldRemoveDelay) {
+-                    if (oldRemoveDelay != NO_TIMEOUT_MARKER && removeDelay == NO_TIMEOUT_MARKER) {
+-                        this.removeExpireCount(chunkX, chunkZ);
+-                    } else if (oldRemoveDelay == NO_TIMEOUT_MARKER) {
+-                        // since old != new, we have that NO_TIMEOUT_MARKER != new
+-                        this.addExpireCount(chunkX, chunkZ);
+-                    }
+-                }
+-            } else {
++            if (current == ticket) {
+                 if (removeDelay != NO_TIMEOUT_MARKER) {
+-                    this.addExpireCount(chunkX, chunkZ);
++                    updateExpireTick(chunk, nextExpire);
+                 }
+-                this.addTicketCounter(type, chunk);
++
++                addTicketCounter(type, chunk);
++            } else {
++                updateExpireTick(chunk, nextExpire);
+             }
+ 
+             if (levelBefore != levelAfter) {
+@@ -735,17 +773,13 @@ public final class ChunkHolderManager {
+             if (oldLevel != newLevel) {
+                 final Ticket unknownTicket = new Ticket(TicketType.UNKNOWN, level);
+                 if (ticketsAtChunk.add(unknownTicket)) {
+-                    this.addExpireCount(chunkX, chunkZ);
+                     this.addTicketCounter(TicketType.UNKNOWN, chunk);
+                 } else {
+                     throw new IllegalStateException("Should have been able to add " + unknownTicket + " to " + ticketsAtChunk);
+                 }
+             }
+ 
+-            final long removeDelay = ((ChunkSystemTicket<T>)(Object)ticket).moonrise$getRemoveDelay();
+-            if (removeDelay != NO_TIMEOUT_MARKER) {
+-                this.removeExpireCount(chunkX, chunkZ);
+-            }
++            updateExpireTick(chunk, ticketsAtChunk.getNextExpireTick());
+ 
+             this.removeTicketCounter(type, chunk);
+ 
+@@ -846,11 +880,11 @@ public final class ChunkHolderManager {
+ 
+         Ticket[] removedList = new Ticket[4];
+ 
+-        for (final PrimitiveIterator.OfLong iterator = this.sectionToChunkToExpireCount.keyIterator(); iterator.hasNext();) {
++        for (final PrimitiveIterator.OfLong iterator = sectionToNextExpiryTick.keyIterator(); iterator.hasNext();) {
+             final long sectionKey = iterator.nextLong();
++            final Long nextSectionExpireTick = sectionToNextExpiryTick.get(sectionKey);
+ 
+-            if (!this.sectionToChunkToExpireCount.containsKey(sectionKey)) {
+-                // removed concurrently
++            if (nextSectionExpireTick == null || nextSectionExpireTick > currentTick) {
+                 continue;
+             }
+ 
+@@ -859,6 +893,7 @@ public final class ChunkHolderManager {
+ 
+             final int ticketShift = ThreadedTicketLevelPropagator.SECTION_SHIFT;
+             final int ticketMask = (1 << ticketShift) - 1;
++
+             final ReentrantAreaLock.Node ticketLock = this.ticketLockArea.lock(
+                 ((lowerChunkX >> ticketShift) - 1) << ticketShift,
+                 ((lowerChunkZ >> ticketShift) - 1) << ticketShift,
+@@ -867,44 +902,65 @@ public final class ChunkHolderManager {
+             );
+ 
+             try {
+-                final Long2IntOpenHashMap chunkToExpireCount = this.sectionToChunkToExpireCount.get(sectionKey);
+-                if (chunkToExpireCount == null) {
++                final Long2LongOpenHashMap chunkToExpireTick = sectionToChunkExpiryTick.get(sectionKey);
++
++                if (chunkToExpireTick == null) {
+                     // lost to some race
+                     continue;
+                 }
+ 
+-                for (final Iterator<Long2IntMap.Entry> iterator1 = chunkToExpireCount.long2IntEntrySet().fastIterator(); iterator1.hasNext();) {
+-                    final Long2IntMap.Entry entry = iterator1.next();
++                long nextExpireTick = NO_EXPIRE_TICK;
++                boolean isSectionUpdated = false;
++
++                for (final Iterator<Long2LongMap.Entry> subiterator = chunkToExpireTick.long2LongEntrySet().fastIterator(); subiterator.hasNext();) {
++                    final Long2LongMap.Entry entry = subiterator.next();
+ 
++                    final long expireTick = entry.getLongValue();
+                     final long chunkKey = entry.getLongKey();
+-                    final int expireCount = entry.getIntValue();
++
++                    if (expireTick > this.currentTick) {
++                        if (expireTick < nextExpireTick) {
++                            nextExpireTick = expireTick;
++                        }
++
++                        continue;
++                    }
+ 
+                     final TicketSet tickets = this.tickets.get(chunkKey);
++
++                    if (tickets == null) {
++                        subiterator.remove();
++
++                        continue;
++                    }
++
+                     final int levelBefore = getTicketLevelAt(tickets);
+ 
+                     if (tickets.size() > removedList.length) {
+                         removedList = new Ticket[tickets.size()];
+                     }
+-                    final int removed = tickets.expireAndRemoveInto(removedList);
++
++                    final int removed = tickets.expireAndRemoveInto(currentTick, removedList);
+                     final int levelAfter = getTicketLevelAt(tickets);
++                    final long chunkNextExpireTick = tickets.getNextExpireTick();
+ 
+                     if (tickets.isEmpty()) {
+                         this.tickets.remove(chunkKey);
+                     }
+                     if (levelBefore != levelAfter) {
+                         this.updateTicketLevel(chunkKey, levelAfter);
+-                    }
+ 
+-                    final int newExpireCount = expireCount - removed;
+-
+-                    if (newExpireCount == expireCount) {
+-                        continue;
++                        isSectionUpdated = true;
+                     }
+ 
+-                    if (newExpireCount != 0) {
+-                        entry.setValue(newExpireCount);
++                    if (chunkNextExpireTick != NO_EXPIRE_TICK) {
++                        entry.setValue(chunkNextExpireTick);
++
++                        if (chunkNextExpireTick < nextExpireTick) {
++                            nextExpireTick = chunkNextExpireTick;
++                        }
+                     } else {
+-                        iterator1.remove();
++                        subiterator.remove();
+                     }
+ 
+                     for (int i = 0; i < removed; ++i) {
+@@ -912,8 +968,17 @@ public final class ChunkHolderManager {
+                     }
+                 }
+ 
+-                if (chunkToExpireCount.isEmpty()) {
+-                    this.sectionToChunkToExpireCount.remove(sectionKey);
++                if (chunkToExpireTick.isEmpty()) {
++                    sectionToChunkExpiryTick.remove(sectionKey);
++                    sectionToNextExpiryTick.remove(sectionKey);
++
++                    continue;
++                }
++
++                sectionToNextExpiryTick.put(sectionKey, nextExpireTick);
++
++                if (!isSectionUpdated) {
++                    continue;
+                 }
+ 
+                 // In order to prevent a race condition where an off-thread invokes processTicketUpdates(), we need to process ticket updates here
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/util/stream/TicketSet.java b/ca/spottedleaf/moonrise/patches/chunk_system/util/stream/TicketSet.java
+index d8db8894324276eb3ec58b4883c5635b44c57847..cddb8d59251980a400c265e938d0920c261f008a 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/util/stream/TicketSet.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/util/stream/TicketSet.java
+@@ -9,13 +9,17 @@ import java.util.Iterator;
+ import java.util.NoSuchElementException;
+ import java.util.Objects;
+ import java.util.function.Consumer;
+-import java.util.function.Predicate;
+ 
++@SuppressWarnings("rawtypes")
+ public final class TicketSet extends AbstractSet<Ticket> {
++    private static final long NO_EXPIRE_TICK = Long.MAX_VALUE;
+ 
+     private Ticket[] tickets;
+     private int size;
+ 
++    private int minTicketLevel = ChunkHolderManager.MAX_TICKET_LEVEL + 1;
++    private long nextExpireTick = NO_EXPIRE_TICK;
++
+     public TicketSet(final int initialCapacity) {
+         this.tickets = new Ticket[initialCapacity];
+     }
+@@ -23,6 +27,8 @@ public final class TicketSet extends AbstractSet<Ticket> {
+     private TicketSet(final Ticket[] tickets, final int size) {
+         this.tickets = tickets;
+         this.size = size;
++
++        refreshMetadata();
+     }
+ 
+     // returns ~<insertion index> when not found, which is always < 0
+@@ -83,19 +89,30 @@ public final class TicketSet extends AbstractSet<Ticket> {
+ 
+         ++this.size;
+         this.tickets[index] = ticket;
++
++        onAdd(index, ticket);
+     }
+ 
+     private void removeAt(final int index) {
++        final Ticket removed = this.tickets[index];
++
+         if (index != --this.size) {
+             System.arraycopy(this.tickets, index + 1, this.tickets, index, this.size - index);
+         }
+ 
+         this.tickets[this.size] = null;
++
++        onRemove(index, removed);
+     }
+ 
+     public TicketSet copy() {
+         final int size = this.size;
+-        return new TicketSet(Arrays.copyOf(this.tickets, size), size);
++        final TicketSet copy = new TicketSet(Arrays.copyOf(tickets, size), size);
++
++        copy.minTicketLevel = minTicketLevel;
++        copy.nextExpireTick = nextExpireTick;
++
++        return copy;
+     }
+ 
+     public Ticket[] copyBackingArray() {
+@@ -107,6 +124,9 @@ public final class TicketSet extends AbstractSet<Ticket> {
+         if (index >= 0) {
+             final Ticket old = this.tickets[index];
+             this.tickets[index] = object;
++
++            refreshMetadata();
++
+             return old;
+         }
+ 
+@@ -131,6 +151,14 @@ public final class TicketSet extends AbstractSet<Ticket> {
+         return this.tickets[0];
+     }
+ 
++    public int getMinTicketLevel() {
++        return minTicketLevel;
++    }
++
++    public long getNextExpireTick() {
++        return nextExpireTick;
++    }
++
+     public Ticket last() {
+         Objects.checkIndex(this.size - 1, this.size);
+         return this.tickets[this.size - 1];
+@@ -170,23 +198,40 @@ public final class TicketSet extends AbstractSet<Ticket> {
+         return true;
+     }
+ 
+-    public int expireAndRemoveInto(final Ticket[] array) {
++    public int expireAndRemoveInto(final long currentServerTick, final Ticket[] array) {
+         Objects.checkFromIndexSize(0, this.size, array.length);
+ 
++        if (nextExpireTick > currentServerTick) {
++            return 0;
++        }
++
+         int removed = 0;
+         int i = 0;
+         final int len = this.size;
+         final Ticket[] tickets = this.tickets;
+ 
++        long nextExpireTick = NO_EXPIRE_TICK;
++
+         for (;;) {
+             if (i >= len) {
++                this.nextExpireTick = nextExpireTick;
++
+                 return removed;
+             }
+ 
+             final Ticket ticket = tickets[i++];
+-            if (!ChunkHolderManager.tickTicket(ticket)) {
++
++            final boolean expirable = ticket.getType().timeout() > 0;
++            final long expireServerTick = ((ChunkSystemTicket<?>) ticket).moonrise$getRemoveDelay();
++
++            if (!expirable || expireServerTick > currentServerTick) {
++                if (expirable && expireServerTick < nextExpireTick) {
++                    nextExpireTick = expireServerTick;
++                }
++
+                 continue;
+             }
++
+             array[removed++] = ticket;
+             break;
+         }
+@@ -197,7 +242,14 @@ public final class TicketSet extends AbstractSet<Ticket> {
+ 
+         for (; i < len; ++i) {
+             final Ticket curr = tickets[i];
+-            if (!ChunkHolderManager.tickTicket(curr)) { // if test throws we're screwed
++            final boolean expirable = curr.getType().timeout() > 0;
++            final long expireServerTick = ((ChunkSystemTicket<?>)curr).moonrise$getRemoveDelay();
++
++            if (!expirable || expireServerTick > currentServerTick) {
++                if (expirable && expireServerTick < nextExpireTick) {
++                    nextExpireTick = expireServerTick;
++                }
++
+                 tickets[lastIndex++] = curr;
+             } else {
+                 array[removed++] = curr;
+@@ -207,9 +259,93 @@ public final class TicketSet extends AbstractSet<Ticket> {
+         // cleanup end
+         Arrays.fill(tickets, lastIndex, len, null);
+         this.size = lastIndex;
++
++        minTicketLevel = lastIndex == 0 ? ChunkHolderManager.MAX_TICKET_LEVEL + 1 : tickets[0].getTicketLevel();
++
++        this.nextExpireTick = nextExpireTick;
++
+         return removed;
+     }
+ 
++    private void refreshMetadata() {
++        if (size == 0) {
++            minTicketLevel = ChunkHolderManager.MAX_TICKET_LEVEL + 1;
++            nextExpireTick = NO_EXPIRE_TICK;
++
++            return;
++        }
++
++        minTicketLevel = tickets[0].getTicketLevel();
++
++        refreshNextExpireTick();
++    }
++
++    private void refreshNextExpireTick() {
++        final int size = this.size;
++        final Ticket[] tickets = this.tickets;
++
++        long nextExpireTick = NO_EXPIRE_TICK;
++
++        for (int index = 0; index < size; ++index) {
++            final Ticket ticket = tickets[index];
++
++            if (ticket.getType().timeout() <= 0) {
++                continue;
++            }
++
++            final long expire = ((ChunkSystemTicket<?>)ticket).moonrise$getRemoveDelay();
++
++            if (expire >= nextExpireTick) {
++                continue;
++            }
++
++            nextExpireTick = expire;
++        }
++
++        this.nextExpireTick = nextExpireTick;
++    }
++
++    private void onAdd(final int index, final Ticket ticket) {
++        if (index == 0) {
++            minTicketLevel = ticket.getTicketLevel();
++        }
++
++        if (ticket.getType().timeout() <= 0) {
++            return;
++        }
++
++        final long expire = ((ChunkSystemTicket<?>) ticket).moonrise$getRemoveDelay();
++
++        if (expire >= nextExpireTick) {
++            return;
++        }
++
++        nextExpireTick = expire;
++    }
++
++    private void onRemove(final int index, final Ticket removed) {
++        if (size == 0) {
++            minTicketLevel = ChunkHolderManager.MAX_TICKET_LEVEL + 1;
++            nextExpireTick = NO_EXPIRE_TICK;
++
++            return;
++        }
++
++        if (index == 0) {
++            minTicketLevel = tickets[0].getTicketLevel();
++        }
++
++        if (removed.getType().timeout() <= 0) {
++            return;
++        }
++
++        if (((ChunkSystemTicket<?>) removed).moonrise$getRemoveDelay() != nextExpireTick) {
++            return;
++        }
++
++        refreshNextExpireTick();
++    }
++
+     @Override
+     public Iterator<Ticket> iterator() {
+         return new Itr();
+diff --git a/net/minecraft/server/level/Ticket.java b/net/minecraft/server/level/Ticket.java
+index 481321fe20adc967d41959258e1915f7fbe8e63c..6e9958854c2177034ba4a3014c44f0f6b7e22d47 100644
+--- a/net/minecraft/server/level/Ticket.java
++++ b/net/minecraft/server/level/Ticket.java
+@@ -19,6 +19,8 @@ public class Ticket<T> implements Comparable<Ticket>, ca.spottedleaf.moonrise.pa
+     private final TicketType type;
+     private final int ticketLevel;
+     private long ticksLeft;
++    private long chunkSystemRemoveDelay;
++
+     // Paper start - add identifier
+     private T identifier; // Paper - rewrite chunk system
+ 
+@@ -29,12 +31,12 @@ public class Ticket<T> implements Comparable<Ticket>, ca.spottedleaf.moonrise.pa
+     // Paper start - rewrite chunk system
+     @Override
+     public final long moonrise$getRemoveDelay() {
+-        return this.ticksLeft;
++        return chunkSystemRemoveDelay;
+     }
+ 
+     @Override
+     public final void moonrise$setRemoveDelay(final long removeDelay) {
+-        this.ticksLeft = removeDelay;
++        chunkSystemRemoveDelay = removeDelay;
+     }
+ 
+     @Override
+@@ -89,6 +91,8 @@ public class Ticket<T> implements Comparable<Ticket>, ca.spottedleaf.moonrise.pa
+         this.type = type;
+         this.ticketLevel = ticketLevel;
+         this.ticksLeft = ticksLeft;
++
++        chunkSystemRemoveDelay = ticksLeft;
+     }
+ 
+     @Override
