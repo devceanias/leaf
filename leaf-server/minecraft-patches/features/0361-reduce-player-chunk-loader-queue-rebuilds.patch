@@ -1,0 +1,312 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Tue, 12 May 2026 23:04:19 +1000
+Subject: [PATCH] reduce player chunk loader queue rebuilds
+
+
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/player/RegionizedPlayerChunkLoader.java b/ca/spottedleaf/moonrise/patches/chunk_system/player/RegionizedPlayerChunkLoader.java
+index 382fcf108a9276d3edc592302aa2e88253455605..d8b04dfb52c284a365663acf4cc919a6c73d4d78 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/player/RegionizedPlayerChunkLoader.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/player/RegionizedPlayerChunkLoader.java
+@@ -17,12 +17,7 @@ import ca.spottedleaf.moonrise.patches.chunk_system.scheduling.ChunkTaskSchedule
+ import ca.spottedleaf.moonrise.patches.chunk_system.ticket.ChunkSystemTicketType;
+ import ca.spottedleaf.moonrise.patches.chunk_system.util.ParallelSearchRadiusIteration;
+ import com.google.gson.JsonObject;
+-import it.unimi.dsi.fastutil.longs.Long2ByteOpenHashMap;
+-import it.unimi.dsi.fastutil.longs.LongArrayList;
+-import it.unimi.dsi.fastutil.longs.LongComparator;
+-import it.unimi.dsi.fastutil.longs.LongHeapPriorityQueue;
+-import it.unimi.dsi.fastutil.longs.LongIterator;
+-import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
++import it.unimi.dsi.fastutil.longs.*;
+ import net.minecraft.network.protocol.Packet;
+ import net.minecraft.network.protocol.game.ClientboundForgetLevelChunkPacket;
+ import net.minecraft.network.protocol.game.ClientboundSetChunkCacheCenterPacket;
+@@ -924,6 +919,104 @@ public final class RegionizedPlayerChunkLoader {
+             }
+         }
+ 
++        private void unloadSentChunksOutsideSend() {
++            for (final LongIterator iterator = sentChunks.iterator(); iterator.hasNext();) {
++                final long currentChunk = iterator.nextLong();
++
++                final int chunkX = CoordinateUtils.getChunkX(currentChunk);
++                final int chunkZ = CoordinateUtils.getChunkZ(currentChunk);
++
++                if (shouldTrackChunk(chunkX, chunkZ) && wantChunkSent(chunkX, chunkZ)) {
++                    continue;
++                }
++
++                if (asyncSender != null) {
++                    asyncSender.remove(currentChunk);
++                }
++
++                iterator.remove();
++
++                sendUnloadChunkRaw(chunkX, chunkZ);
++            }
++        }
++
++        private void rebuildSendQueue() {
++            sendQueue.clear();
++            sendChunkCache.clear();
++
++            unloadSentChunksOutsideSend();
++
++            for (final Long2ByteMap.Entry entry : chunkTicketStage.long2ByteEntrySet()) {
++                final byte ticketStage = entry.getByteValue();
++
++                if (ticketStage != CHUNK_TICKET_STAGE_GENERATED && ticketStage != CHUNK_TICKET_STAGE_TICK) {
++                    continue;
++                }
++
++                final long chunkKey = entry.getLongKey();
++                final int chunkX = CoordinateUtils.getChunkX(chunkKey);
++                final int chunkZ = CoordinateUtils.getChunkZ(chunkKey);
++                final boolean shouldSend = shouldTrackChunk(chunkX, chunkZ) && wantChunkSent(chunkX, chunkZ);
++
++                if (!shouldSend) {
++                    if (asyncSender != null) {
++                        asyncSender.remove(chunkKey);
++                    }
++
++                    continue;
++                }
++
++                if (sentChunks.contains(chunkKey) || (asyncSender != null && asyncSender.contains(chunkKey))) {
++                    continue;
++                }
++
++                sendQueue.enqueue(chunkKey);
++            }
++        }
++
++        private void rebuildTickingQueue() {
++            tickingQueue.clear();
++            tickChunkCache.clear();
++
++            for (final Long2ByteMap.Entry entry : chunkTicketStage.long2ByteEntrySet()) {
++                if (entry.getByteValue() != CHUNK_TICKET_STAGE_GENERATED) {
++                    continue;
++                }
++
++                final long chunkKey = entry.getLongKey();
++                final int chunkX = CoordinateUtils.getChunkX(chunkKey);
++                final int chunkZ = CoordinateUtils.getChunkZ(chunkKey);
++
++                if (!shouldTrackChunk(chunkX, chunkZ) || !wantChunkTicked(chunkX, chunkZ)) {
++                    continue;
++                }
++
++                tickingQueue.enqueue(chunkKey);
++            }
++        }
++
++        private void rebuildGenerationQueue(final boolean canGenerateChunks) {
++            genQueue.clear();
++
++            for (final Long2ByteMap.Entry entry : chunkTicketStage.long2ByteEntrySet()) {
++                if (entry.getByteValue() != CHUNK_TICKET_STAGE_LOADED) {
++                    continue;
++                }
++
++                final long chunkKey = entry.getLongKey();
++                final int chunkX = CoordinateUtils.getChunkX(chunkKey);
++                final int chunkZ = CoordinateUtils.getChunkZ(chunkKey);
++
++                if (!shouldTrackChunk(chunkX, chunkZ) ||
++                    (!canGenerateChunks && !isLoadedChunkGeneratable(chunkX, chunkZ))
++                ) {
++                    continue;
++                }
++
++                genQueue.enqueue(chunkKey);
++            }
++        }
++
+         void updateQueues(final long time) {
+             TickThread.ensureTickThread(this.player, "Cannot tick player chunk loader async");
+             if (this.removed) {
+@@ -1283,6 +1376,11 @@ public final class RegionizedPlayerChunkLoader {
+             final int prevChunkZ = this.lastChunkZ;
+ 
+             final boolean borderTrackingUnchanged = lastBorderTrackState.equals(borderState);
++            final boolean hasChunkChanged = prevChunkX != currentChunkX || prevChunkZ != currentChunkZ;
++            final boolean sendDistanceChanged = sendViewDistance != this.lastSendDistance;
++            final boolean loadDistanceChanged = loadViewDistance != this.lastLoadDistance;
++            final boolean tickDistanceChanged = tickViewDistance != this.lastTickDistance;
++            final boolean canGenerateChanged = this.canGenerateChunks != canGenerateChunks;
+ 
+             final boolean teleported = prevChunkX != Integer.MIN_VALUE
+                 && prevChunkZ != Integer.MIN_VALUE
+@@ -1292,16 +1390,15 @@ public final class RegionizedPlayerChunkLoader {
+ 
+             if (
+                 // has view distance stayed the same?
+-                sendViewDistance == this.lastSendDistance
+-                    && loadViewDistance == this.lastLoadDistance
+-                    && tickViewDistance == this.lastTickDistance
++                !sendDistanceChanged
++                    && !loadDistanceChanged
++                    && !tickDistanceChanged
+ 
+                     // has our chunk stayed the same?
+-                    && prevChunkX == currentChunkX
+-                    && prevChunkZ == currentChunkZ
++                    && !hasChunkChanged
+ 
+                     // can we still generate chunks?
+-                    && this.canGenerateChunks == canGenerateChunks
++                    && !canGenerateChanged
+ 
+                     // has border tracking stayed the same?
+                     && borderTrackingUnchanged
+@@ -1310,6 +1407,8 @@ public final class RegionizedPlayerChunkLoader {
+                 return;
+             }
+ 
++            final boolean fullQueueRebuild = hasChunkChanged || loadDistanceChanged || !borderTrackingUnchanged;
++
+             // update distance maps
+             this.broadcastMap.update(currentChunkX, currentChunkZ, sendViewDistance + 1);
+             this.loadTicketCleanup.update(currentChunkX, currentChunkZ, loadViewDistance + 1);
+@@ -1327,20 +1426,6 @@ public final class RegionizedPlayerChunkLoader {
+                 this.player.connection.send(this.updateClientSimulationDistance(tickViewDistance));
+             }
+ 
+-            this.sendQueue.clear();
+-            this.tickingQueue.clear();
+-            this.generatingQueue.clear();
+-            this.genQueue.clear();
+-            this.loadingQueue.clear();
+-            this.loadQueue.clear();
+-
+-            sendNeighbourCache.clear();
+-            tickNeighbourCache.clear();
+-
+-            if (teleported && asyncSender != null) {
+-                asyncSender.clear();
+-            }
+-
+             this.lastChunkX = currentChunkX;
+             this.lastChunkZ = currentChunkZ;
+             this.lastSendDistance = sendViewDistance;
+@@ -1349,38 +1434,66 @@ public final class RegionizedPlayerChunkLoader {
+             this.canGenerateChunks = canGenerateChunks;
+             this.lastBorderTrackState = borderState;
+ 
+-            clearChunkViewCaches();
++            if (fullQueueRebuild) {
++                sendQueue.clear();
++                tickingQueue.clear();
++                generatingQueue.clear();
++                genQueue.clear();
++                loadingQueue.clear();
++                loadQueue.clear();
+ 
+-            // +1 since we need to load chunks +1 around the load view distance...
+-            final int iterationDistance = loadViewDistance + 1;
++                sendNeighbourCache.clear();
++                tickNeighbourCache.clear();
+ 
+-            final int minChunkX = currentChunkX - iterationDistance;
+-            final int maxChunkX = currentChunkX + iterationDistance;
+-            final int minChunkZ = currentChunkZ - iterationDistance;
+-            final int maxChunkZ = currentChunkZ + iterationDistance;
++                if (teleported && asyncSender != null) {
++                    asyncSender.clear();
++                }
+ 
+-            if (borderState.enabled()) {
+-                final int clampedMinChunkX = Math.max(minChunkX, borderState.minChunkX() - 1);
+-                final int clampedMaxChunkX = Math.min(maxChunkX, borderState.maxChunkX() + 1);
+-                final int clampedMinChunkZ = Math.max(minChunkZ, borderState.minChunkZ() - 1);
+-                final int clampedMaxChunkZ = Math.min(maxChunkZ, borderState.maxChunkZ() + 1);
++                clearChunkViewCaches();
+ 
+-                if (clampedMinChunkX != minChunkX ||
+-                    clampedMaxChunkX != maxChunkX ||
+-                    clampedMinChunkZ != minChunkZ ||
+-                    clampedMaxChunkZ != maxChunkZ
+-                ) {
+-                    unloadSentChunksOutsideTrack();
++                // +1 since we need to load chunks +1 around the load view distance...
++                final int iterationDistance = loadViewDistance + 1;
+ 
+-                    for (int chunkX = clampedMinChunkX; chunkX <= clampedMaxChunkX; ++chunkX) {
+-                        final int dx = chunkX - currentChunkX;
++                final int minChunkX = currentChunkX - iterationDistance;
++                final int maxChunkX = currentChunkX + iterationDistance;
++                final int minChunkZ = currentChunkZ - iterationDistance;
++                final int maxChunkZ = currentChunkZ + iterationDistance;
+ 
+-                        for (int chunkZ = clampedMinChunkZ; chunkZ <= clampedMaxChunkZ; ++chunkZ) {
+-                            if (Math.max(Math.abs(dx), Math.abs(chunkZ - currentChunkZ)) > iterationDistance) {
+-                                continue;
+-                            }
++                if (borderState.enabled()) {
++                    final int clampedMinChunkX = Math.max(minChunkX, borderState.minChunkX() - 1);
++                    final int clampedMaxChunkX = Math.min(maxChunkX, borderState.maxChunkX() + 1);
++                    final int clampedMinChunkZ = Math.max(minChunkZ, borderState.minChunkZ() - 1);
++                    final int clampedMaxChunkZ = Math.min(maxChunkZ, borderState.maxChunkZ() + 1);
+ 
+-                            processCandidateChunk(chunkX, chunkZ, canGenerateChunks);
++                    if (clampedMinChunkX != minChunkX ||
++                        clampedMaxChunkX != maxChunkX ||
++                        clampedMinChunkZ != minChunkZ ||
++                        clampedMaxChunkZ != maxChunkZ
++                    ) {
++                        unloadSentChunksOutsideTrack();
++
++                        for (int chunkX = clampedMinChunkX; chunkX <= clampedMaxChunkX; ++chunkX) {
++                            final int dx = chunkX - currentChunkX;
++
++                            for (int chunkZ = clampedMinChunkZ; chunkZ <= clampedMaxChunkZ; ++chunkZ) {
++                                if (Math.max(Math.abs(dx), Math.abs(chunkZ - currentChunkZ)) > iterationDistance) {
++                                    continue;
++                                }
++
++                                processCandidateChunk(chunkX, chunkZ, canGenerateChunks);
++                            }
++                        }
++                    } else {
++                        final long[] toIterate = ParallelSearchRadiusIteration.getSearchIteration(iterationDistance);
++
++                        // the iteration order is by increasing manhattan distance - so, we do NOT need to
++                        // sort anything in the queue!
++                        for (final long deltaChunk : toIterate) {
++                            processCandidateChunkIfTracked(
++                                CoordinateUtils.getChunkX(deltaChunk) + currentChunkX,
++                                CoordinateUtils.getChunkZ(deltaChunk) + currentChunkZ,
++                                canGenerateChunks
++                            );
+                         }
+                     }
+                 } else {
+@@ -1397,16 +1510,16 @@ public final class RegionizedPlayerChunkLoader {
+                     }
+                 }
+             } else {
+-                final long[] toIterate = ParallelSearchRadiusIteration.getSearchIteration(iterationDistance);
+-
+-                // the iteration order is by increasing manhattan distance - so, we do NOT need to
+-                // sort anything in the queue!
+-                for (final long deltaChunk : toIterate) {
+-                    processCandidateChunkIfTracked(
+-                        CoordinateUtils.getChunkX(deltaChunk) + currentChunkX,
+-                        CoordinateUtils.getChunkZ(deltaChunk) + currentChunkZ,
+-                        canGenerateChunks
+-                    );
++                if (sendDistanceChanged) {
++                    rebuildSendQueue();
++                }
++
++                if (tickDistanceChanged) {
++                    rebuildTickingQueue();
++                }
++
++                if (canGenerateChanged) {
++                    rebuildGenerationQueue(canGenerateChunks);
+                 }
+             }
+ 

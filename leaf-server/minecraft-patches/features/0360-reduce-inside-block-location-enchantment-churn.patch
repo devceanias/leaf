@@ -1,0 +1,310 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Tue, 12 May 2026 23:03:26 +1000
+Subject: [PATCH] reduce inside-block + location-enchantment churn
+
+
+diff --git a/net/minecraft/world/entity/Entity.java b/net/minecraft/world/entity/Entity.java
+index 87a0a41a48dd0da3274fa1cd1be82c1259282570..7ed623514fc8032c818bca8a4b646044bde7af05 100644
+--- a/net/minecraft/world/entity/Entity.java
++++ b/net/minecraft/world/entity/Entity.java
+@@ -1859,6 +1859,12 @@ public abstract class Entity implements SyncedDataHolder, DebugValueSource, Name
+             return checkInsideStationary(level, from, to, aabb, stepBasedCollector, visited, maxSteps);
+         }
+ 
++        final AABB old = aabb.move(from.subtract(to));
++
++        if (hasSameRange(old, aabb)) {
++            return checkInsideStationary(level, from, to, aabb, stepBasedCollector, visited, maxSteps);
++        }
++
+         final net.minecraft.world.level.chunk.ChunkAccess[] cachedChunk = {null};
+         final long[] cachedChunkPos = { Long.MIN_VALUE };
+ 
+@@ -1949,6 +1955,15 @@ public abstract class Entity implements SyncedDataHolder, DebugValueSource, Name
+         return last[0] + 1;
+     }
+ 
++    private boolean hasSameRange(final AABB oldAabb, final AABB newAabb) {
++        return Mth.floor(oldAabb.minX) == Mth.floor(newAabb.minX)
++            && Mth.floor(oldAabb.maxX) == Mth.floor(newAabb.maxX)
++            && Mth.floor(oldAabb.minY) == Mth.floor(newAabb.minY)
++            && Mth.floor(oldAabb.maxY) == Mth.floor(newAabb.maxY)
++            && Mth.floor(oldAabb.minZ) == Mth.floor(newAabb.minZ)
++            && Mth.floor(oldAabb.maxZ) == Mth.floor(newAabb.maxZ);
++    }
++
+     private int checkInsideStationary(
+         final Level level,
+         final Vec3 from,
+diff --git a/net/minecraft/world/entity/LivingEntity.java b/net/minecraft/world/entity/LivingEntity.java
+index 50a979ff3f5eb8d422b89aad22ff77af9b5d517f..a7c41dd2946702de88ea68bb1feddf8658620b18 100644
+--- a/net/minecraft/world/entity/LivingEntity.java
++++ b/net/minecraft/world/entity/LivingEntity.java
+@@ -110,6 +110,7 @@ import net.minecraft.world.item.component.KineticWeapon;
+ import net.minecraft.world.item.component.Weapon;
+ import net.minecraft.world.item.enchantment.Enchantment;
+ import net.minecraft.world.item.enchantment.EnchantmentHelper;
++import net.minecraft.world.item.enchantment.ItemEnchantments;
+ import net.minecraft.world.item.enchantment.effects.EnchantmentLocationBasedEffect;
+ import net.minecraft.world.item.equipment.Equippable;
+ import net.minecraft.world.level.ClipContext;
+@@ -286,6 +287,13 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+     private final EnumMap<EquipmentSlot, Reference2ObjectMap<Enchantment, Set<EnchantmentLocationBasedEffect>>> activeLocationDependentEnchantments = new EnumMap<>(
+         EquipmentSlot.class
+     );
++
++    private boolean hasLocationBasedEnchantments = false;
++    private boolean locationBasedEnchantmentsDirty = true;
++
++    private long lastChangedBlockKey = Long.MIN_VALUE;
++    private int lastChangedBlockTick = Integer.MIN_VALUE;
++
+     protected final EntityEquipment equipment;
+     private Waypoint.Icon locatorBarIcon = new Waypoint.Icon();
+ 
+@@ -608,6 +616,20 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+     }
+ 
+     protected void onChangedBlock(ServerLevel level, BlockPos pos) {
++        final int tickCount = this.tickCount;
++        final long blockKey = pos.asLong();
++
++        if (lastChangedBlockTick == tickCount && lastChangedBlockKey == blockKey) {
++            return;
++        }
++
++        lastChangedBlockTick = tickCount;
++        lastChangedBlockKey = blockKey;
++
++        if (!hasLocationBasedEnchantments()) {
++            return;
++        }
++
+         EnchantmentHelper.runLocationChangedEffects(level, this);
+     }
+ 
+@@ -2328,6 +2350,37 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+         return this.activeLocationDependentEnchantments.computeIfAbsent(slot, equipmentSlot -> new Reference2ObjectArrayMap<>());
+     }
+ 
++    private boolean hasLocationBasedEnchantments() {
++        if (!locationBasedEnchantmentsDirty) {
++            return hasLocationBasedEnchantments;
++        }
++
++        boolean has = false;
++
++        for (final EquipmentSlot slot : EquipmentSlot.VALUES_ARRAY) {
++            final ItemStack stack = getItemBySlot(slot);
++
++            if (stack.isEmpty()) {
++                continue;
++            }
++
++            final ItemEnchantments enchantments = stack.get(DataComponents.ENCHANTMENTS);
++
++            if (enchantments == null || enchantments.locationChangedEntries(slot).isEmpty()) {
++                continue;
++            }
++
++            has = true;
++
++            break;
++        }
++
++        locationBasedEnchantmentsDirty = false;
++        hasLocationBasedEnchantments = has;
++
++        return has;
++    }
++
+     public void lungeForwardMaybe() {
+         if (this.level() instanceof ServerLevel serverLevel) {
+             EnchantmentHelper.doLungeEffects(serverLevel, this);
+@@ -3802,6 +3855,8 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+         }
+ 
+         if (map != null) {
++            locationBasedEnchantmentsDirty = true;
++
+             for (Entry<EquipmentSlot, ItemStack> entry : map.entrySet()) {
+                 EquipmentSlot equipmentSlot1 = entry.getKey();
+                 ItemStack itemBySlot = entry.getValue();
+@@ -3828,7 +3883,7 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+     }
+ 
+     public boolean equipmentHasChanged(ItemStack oldItem, ItemStack newItem) {
+-        return oldItem != newItem && !ItemStack.matches(newItem, oldItem);
++        return oldItem != newItem && !ItemStack.hasSameSyncState(newItem, oldItem) && !ItemStack.matches(newItem, oldItem);
+     }
+ 
+     private void handleHandSwap(Map<EquipmentSlot, ItemStack> hands) {
+@@ -4955,6 +5010,9 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+ 
+     public void onEquippedItemBroken(Item item, EquipmentSlot slot) {
+         this.level().broadcastEntityEvent(this, entityEventForEquipmentBreak(slot));
++
++        locationBasedEnchantmentsDirty = true;
++
+         this.stopLocationBasedEffects(this.getItemBySlot(slot), slot, this.attributes);
+     }
+ 
+diff --git a/net/minecraft/world/item/enchantment/EnchantmentHelper.java b/net/minecraft/world/item/enchantment/EnchantmentHelper.java
+index cff22215b0c01794bb723ec51f7eb4f8c430048a..f089a1020efd242e958bf2bcf37829ac6245bb2a 100644
+--- a/net/minecraft/world/item/enchantment/EnchantmentHelper.java
++++ b/net/minecraft/world/item/enchantment/EnchantmentHelper.java
+@@ -255,20 +255,96 @@ public class EnchantmentHelper {
+         }
+     }
+ 
++    @SuppressWarnings("unchecked")
+     public static void runLocationChangedEffects(ServerLevel level, LivingEntity entity) {
+-        runIterationOnEquipment(entity, (enchantment, level1, item) -> enchantment.value().runLocationChangedEffects(level, level1, item, entity));
++        for (final EquipmentSlot slot : EquipmentSlot.VALUES_ARRAY) {
++            final ItemStack stack = entity.getItemBySlot(slot);
++
++            if (stack.isEmpty()) {
++                continue;
++            }
++
++            final ItemEnchantments enchantments = stack.get(DataComponents.ENCHANTMENTS);
++
++            if (enchantments == null || enchantments.isEmpty()) {
++                continue;
++            }
++
++            final ObjectArrayList<Entry<Holder<Enchantment>>> changed = enchantments.locationChangedEntries(slot);
++
++            if (changed.isEmpty()) {
++                continue;
++            }
++
++            final Object[] elements = changed.elements();
++            final EnchantedItemInUse item = new EnchantedItemInUse(stack, slot, entity);
++
++            for (int index = 0, length = changed.size(); index < length; ++index) {
++                final Entry<Holder<Enchantment>> entry = (Entry<Holder<Enchantment>>) elements[index];
++
++                entry.getKey().value().runLocationChangedEffects(level, entry.getIntValue(), item, entity);
++            }
++        }
+     }
+ 
++    @SuppressWarnings("unchecked")
+     public static void runLocationChangedEffects(ServerLevel level, ItemStack stack, LivingEntity entity, EquipmentSlot slot) {
+-        runIterationOnItem(stack, slot, entity, (enchantment, level1, item) -> enchantment.value().runLocationChangedEffects(level, level1, item, entity));
++        if (stack.isEmpty()) {
++            return;
++        }
++
++        final ItemEnchantments enchantments = stack.get(DataComponents.ENCHANTMENTS);
++
++        if (enchantments == null || enchantments.isEmpty()) {
++            return;
++        }
++
++        final ObjectArrayList<Entry<Holder<Enchantment>>> changed = enchantments.locationChangedEntries(slot);
++
++        if (changed.isEmpty()) {
++            return;
++        }
++
++        final Object[] elements = changed.elements();
++        final EnchantedItemInUse item = new EnchantedItemInUse(stack, slot, entity);
++
++        for (int index = 0, length = changed.size(); index < length; ++index) {
++            final Entry<Holder<Enchantment>> entry = (Entry<Holder<Enchantment>>) elements[index];
++
++            entry.getKey().value().runLocationChangedEffects(level, entry.getIntValue(), item, entity);
++        }
+     }
+ 
+     public static void stopLocationBasedEffects(LivingEntity entity) {
+         runIterationOnEquipment(entity, (enchantment, level, item) -> enchantment.value().stopLocationBasedEffects(level, item, entity));
+     }
+ 
++    @SuppressWarnings("unchecked")
+     public static void stopLocationBasedEffects(ItemStack stack, LivingEntity entity, EquipmentSlot slot) {
+-        runIterationOnItem(stack, slot, entity, (enchantment, level, item) -> enchantment.value().stopLocationBasedEffects(level, item, entity));
++        if (stack.isEmpty()) {
++            return;
++        }
++
++        final ItemEnchantments enchantments = stack.get(DataComponents.ENCHANTMENTS);
++
++        if (enchantments == null || enchantments.isEmpty()) {
++            return;
++        }
++
++        final ObjectArrayList<Entry<Holder<Enchantment>>> changed = enchantments.locationChangedEntries(slot);
++
++        if (changed.isEmpty()) {
++            return;
++        }
++
++        final Object[] elements = changed.elements();
++        final EnchantedItemInUse item = new EnchantedItemInUse(stack, slot, entity);
++
++        for (int index = 0, length = changed.size(); index < length; ++index) {
++            final Entry<Holder<Enchantment>> entry = (Entry<Holder<Enchantment>>) elements[index];
++
++            entry.getKey().value().stopLocationBasedEffects(entry.getIntValue(), item, entity);
++        }
+     }
+ 
+     @SuppressWarnings("unchecked")
+diff --git a/net/minecraft/world/item/enchantment/ItemEnchantments.java b/net/minecraft/world/item/enchantment/ItemEnchantments.java
+index 241604bf086b425940272bbddacdaf88fe10c792..2c91e879c98ffb58ef6b80a03f46ba293e5a6e30 100644
+--- a/net/minecraft/world/item/enchantment/ItemEnchantments.java
++++ b/net/minecraft/world/item/enchantment/ItemEnchantments.java
+@@ -45,6 +45,7 @@ public class ItemEnchantments implements TooltipProvider {
+     final it.unimi.dsi.fastutil.objects.Object2IntAVLTreeMap<Holder<Enchantment>> enchantments; // Paper
+ 
+     private transient @Nullable ObjectArrayList<Entry<Holder<Enchantment>>> @Nullable [] leaf$tickingBySlot;
++    private transient @Nullable ObjectArrayList<Entry<Holder<Enchantment>>> @Nullable [] leaf$locationChangedBySlot;
+ 
+     ItemEnchantments(it.unimi.dsi.fastutil.objects.Object2IntAVLTreeMap<Holder<Enchantment>> enchantments) { // Paper
+         this.enchantments = enchantments;
+@@ -141,6 +142,41 @@ public class ItemEnchantments implements TooltipProvider {
+ 
+         return tickingEntries;
+     }
++
++    @SuppressWarnings("unchecked")
++    public ObjectArrayList<Entry<Holder<Enchantment>>> locationChangedEntries(final net.minecraft.world.entity.EquipmentSlot slot) {
++        @Nullable ObjectArrayList<Entry<Holder<Enchantment>>> @Nullable [] list = leaf$locationChangedBySlot;
++
++        if (list == null) {
++            list = new ObjectArrayList[net.minecraft.world.entity.EquipmentSlot.VALUES_ARRAY.length];
++
++            leaf$locationChangedBySlot = list;
++        }
++
++        final int index = slot.ordinal();
++
++        ObjectArrayList<Entry<Holder<Enchantment>>> locationChangedEntries = list[index];
++
++        if (locationChangedEntries != null) {
++            return locationChangedEntries;
++        }
++
++        locationChangedEntries = new ObjectArrayList<>();
++
++        for (final Entry<Holder<Enchantment>> entry : enchantments.object2IntEntrySet()) {
++            final Enchantment enchantment = entry.getKey().value();
++
++            if (!enchantment.effects().has(EnchantmentEffectComponents.LOCATION_CHANGED) || !enchantment.matchingSlot(slot)) {
++                continue;
++            }
++
++            locationChangedEntries.add(entry);
++        }
++
++        list[index] = locationChangedEntries;
++
++        return locationChangedEntries;
++    }
+     // Leaf end - cache slot-specific ticking enchantments
+ 
+     public int size() {

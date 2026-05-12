@@ -1,0 +1,59 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Tue, 12 May 2026 23:04:33 +1000
+Subject: [PATCH] cache virtual border generation chunk holders
+
+
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkTaskScheduler.java b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkTaskScheduler.java
+index f5dbe92f16a7b8026bc492658d3fb0a66e05f065..665c7e3df07aa16f5edc3c715391e0467c8abf61 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkTaskScheduler.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkTaskScheduler.java
+@@ -27,6 +27,7 @@ import ca.spottedleaf.moonrise.patches.chunk_system.util.ParallelSearchRadiusIte
+ import com.google.gson.JsonArray;
+ import com.google.gson.JsonObject;
+ import com.mojang.logging.LogUtils;
++import it.unimi.dsi.fastutil.longs.Long2ReferenceOpenHashMap;
+ import net.minecraft.CrashReport;
+ import net.minecraft.CrashReportCategory;
+ import net.minecraft.ReportedException;
+@@ -118,6 +119,9 @@ public final class ChunkTaskScheduler {
+     public final BalancedPrioritisedThreadPool.OrderedStreamGroup.Queue compressionExecutor;
+     public final BalancedPrioritisedThreadPool.OrderedStreamGroup.Queue saveExecutor;
+ 
++    private final Long2ReferenceOpenHashMap<GenerationChunkHolder> borderGenerationChunkHolders =
++        new Long2ReferenceOpenHashMap<>();
++
+     private final PrioritisedTaskQueue mainThreadExecutor = new PrioritisedTaskQueue();
+ 
+     public final ChunkHolderManager chunkHolderManager;
+@@ -777,6 +781,21 @@ public final class ChunkTaskScheduler {
+         return !world.leaf$shouldAccessChunk(chunkX, chunkZ);
+     }
+ 
++    private GenerationChunkHolder getBorderChunkAt(final int chunkX, final int chunkZ) {
++        final long key = CoordinateUtils.getChunkKey(chunkX, chunkZ);
++        final GenerationChunkHolder holder = borderGenerationChunkHolders.get(key);
++
++        if (holder != null) {
++            return holder;
++        }
++
++        final GenerationChunkHolder created = new VirtualBorderGenerationChunkHolder(world, chunkX, chunkZ);
++
++        borderGenerationChunkHolders.put(key, created);
++
++        return created;
++    }
++
+     ChunkProgressionTask schedule(final int chunkX, final int chunkZ, final ChunkStatus targetStatus, final NewChunkHolder chunkHolder,
+                                   final List<ChunkProgressionTask> allTasks) {
+         return this.schedule(chunkX, chunkZ, targetStatus, chunkHolder, allTasks, chunkHolder.getEffectivePriority(Priority.NORMAL));
+@@ -883,7 +902,7 @@ public final class ChunkTaskScheduler {
+                     }
+ 
+                     if (shouldUseBorderChunk(nx, nz)) {
+-                        return new VirtualBorderGenerationChunkHolder(this.world, nx, nz);
++                        return getBorderChunkAt(nx, nz);
+                     }
+ 
+                     throw new IllegalStateException("Missing chunkholder when gathering generation neighbours");

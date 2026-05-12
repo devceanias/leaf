@@ -1,0 +1,150 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Tue, 12 May 2026 23:02:33 +1000
+Subject: [PATCH] optimise container slot sync + item sync-state checks
+
+
+diff --git a/net/minecraft/world/inventory/AbstractContainerMenu.java b/net/minecraft/world/inventory/AbstractContainerMenu.java
+index d3ff6d078485e12eaa68e6d4f1bc21ae30de20f1..9a9ac080cb6bad8d42bd8993433bdb894aec9bcc 100644
+--- a/net/minecraft/world/inventory/AbstractContainerMenu.java
++++ b/net/minecraft/world/inventory/AbstractContainerMenu.java
+@@ -1,6 +1,5 @@
+ package net.minecraft.world.inventory;
+ 
+-import com.google.common.base.Suppliers;
+ import com.google.common.collect.HashBasedTable;
+ import com.google.common.collect.Lists;
+ import com.google.common.collect.Sets;
+@@ -264,13 +263,27 @@ public abstract class AbstractContainerMenu {
+ 
+     private final org.dreeam.leaf.util.cache.CachedItemStackSupplier broadcastCarried = new org.dreeam.leaf.util.cache.CachedItemStackSupplier(); // Leaf - Reduce AbstractContainerMenu allocations
+     public void broadcastChanges() {
+-        for (int i = 0; i < this.slots.size(); i++) {
+-            ItemStack item = this.slots.get(i).getItem();
+-            // Leaf start - Reduce AbstractContainerMenu allocations
+-            this.broadcastCarried.reset(item);
+-            this.triggerSlotListeners(i, item, this.broadcastCarried);
+-            this.synchronizeSlotToRemote(i, item, this.broadcastCarried);
+-            // Leaf end - Reduce AbstractContainerMenu allocations
++        final boolean syncRemote = !suppressRemoteUpdates;
++
++        for (int index = 0, length = slots.size(); index < length; index++) {
++            final ItemStack slotItem = slots.get(index).getItem();
++
++            final boolean notifyListeners = !ItemStack.hasSameSyncState(lastSlots.get(index), slotItem);
++            final boolean notifyRemote = syncRemote && !remoteSlots.get(index).leaf$matchesSyncState(slotItem);
++
++            if (!notifyListeners && !notifyRemote) {
++                continue;
++            }
++
++            this.broadcastCarried.reset(slotItem);
++
++            if (notifyListeners) {
++                triggerSlotListeners(index, slotItem, broadcastCarried);
++            }
++
++            if (notifyRemote) {
++                synchronizeSlotToRemote(index, slotItem, broadcastCarried);
++            }
+         }
+ 
+         this.synchronizeCarriedToRemote();
+@@ -278,6 +291,7 @@ public abstract class AbstractContainerMenu {
+         for (int i = 0; i < this.dataSlots.size(); i++) {
+             DataSlot dataSlot = this.dataSlots.get(i);
+             int i1 = dataSlot.get();
++
+             if (dataSlot.checkAndClearUpdateFlag()) {
+                 this.updateDataSlotListeners(i, i1);
+             }
+@@ -310,24 +324,29 @@ public abstract class AbstractContainerMenu {
+ 
+     public void triggerSlotListeners(int slotIndex, ItemStack stack, Supplier<ItemStack> supplier) {
+         ItemStack itemStack = this.lastSlots.get(slotIndex);
+-        if (!ItemStack.matches(itemStack, stack)) {
+-            ItemStack itemStack1 = supplier.get();
+-            this.lastSlots.set(slotIndex, itemStack1);
+ 
+-            for (ContainerListener containerListener : this.containerListeners) {
+-                containerListener.slotChanged(this, slotIndex, itemStack, itemStack1); // Paper - Add PlayerInventorySlotChangeEvent
+-            }
++        if (ItemStack.hasSameSyncState(itemStack, stack) || ItemStack.matches(itemStack, stack)) {
++            return;
++        }
++
++        ItemStack itemStack1 = supplier.get();
++        this.lastSlots.set(slotIndex, itemStack1);
++
++        for (ContainerListener containerListener : this.containerListeners) {
++            containerListener.slotChanged(this, slotIndex, itemStack, itemStack1); // Paper - Add PlayerInventorySlotChangeEvent
+         }
+     }
+ 
+     public void synchronizeSlotToRemote(int slotIndex, ItemStack stack, Supplier<ItemStack> supplier) {
+         if (!this.suppressRemoteUpdates) {
+             RemoteSlot remoteSlot = this.remoteSlots.get(slotIndex);
+-            if (!remoteSlot.matches(stack)) {
+-                remoteSlot.force(stack);
+-                if (this.synchronizer != null) {
+-                    this.synchronizer.sendSlotChange(this, slotIndex, supplier.get());
+-                }
++            if (remoteSlot.leaf$matchesSyncState(stack) || remoteSlot.matches(stack)) {
++                return;
++            }
++
++            remoteSlot.force(stack);
++            if (this.synchronizer != null) {
++                this.synchronizer.sendSlotChange(this, slotIndex, supplier.get());
+             }
+         }
+     }
+diff --git a/net/minecraft/world/inventory/RemoteSlot.java b/net/minecraft/world/inventory/RemoteSlot.java
+index efb88c3c3fec464c4570241d20c8436ee79ac58b..55dface53c4a4f9ccae1fc241e476e69c8f1e01e 100644
+--- a/net/minecraft/world/inventory/RemoteSlot.java
++++ b/net/minecraft/world/inventory/RemoteSlot.java
+@@ -27,6 +27,10 @@ public interface RemoteSlot {
+ 
+     boolean matches(ItemStack stack);
+ 
++    default boolean leaf$matchesSyncState(final ItemStack stack) {
++        return false;
++    }
++
+     public static class Synchronized implements RemoteSlot {
+         private final HashedPatchMap.HashGenerator hasher;
+         private @Nullable ItemStack remoteStack = null;
+@@ -60,6 +64,11 @@ public interface RemoteSlot {
+             }
+         }
+ 
++        @Override
++        public boolean leaf$matchesSyncState(final ItemStack stack) {
++            return remoteStack != null && ItemStack.hasSameSyncState(remoteStack, stack);
++        }
++
+         public void copyFrom(RemoteSlot.Synchronized other) {
+             this.remoteStack = other.remoteStack;
+             this.remoteHash = other.remoteHash;
+diff --git a/net/minecraft/world/item/ItemStack.java b/net/minecraft/world/item/ItemStack.java
+index 31265f4b4116cd51b29f053275fd7f634c08e7ec..feba8fb4da080787b23bcc019571bfa3a69d2043 100644
+--- a/net/minecraft/world/item/ItemStack.java
++++ b/net/minecraft/world/item/ItemStack.java
+@@ -933,9 +933,15 @@ public final class ItemStack implements DataComponentHolder, net.caffeinemc.mods
+         return stack.components == other.components || stack.components.leaf$getComponentSyncTag() == other.components.leaf$getComponentSyncTag();
+     }
+ 
++    public static boolean hasSameSyncState(final ItemStack stack, final ItemStack other) {
++        return stack == other || stack.getCount() == other.getCount() && stack.is(other.getItem()) && (
++            stack.isEmpty() && other.isEmpty() || hasSameSyncComponents(stack, other)
++        );
++    }
++
+     public static boolean isSameItemSameComponents(ItemStack stack, ItemStack other) {
+-        return stack == other || stack.is(other.getItem()) && (
+-            stack.isEmpty() && other.isEmpty() || hasSameSyncComponents(stack, other) || Objects.equals(stack.components, other.components)
++        return hasSameSyncState(stack, other) || stack.is(other.getItem()) && (
++            Objects.equals(stack.components, other.components)
+         ); // Gale - optimize identical item checks
+     }
+ 

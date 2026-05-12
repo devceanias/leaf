@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Tue, 12 May 2026 22:56:14 +1000
+Subject: [PATCH] optimise gamemode value retrieval
+
+
+diff --git a/src/main/java/org/bukkit/GameMode.java b/src/main/java/org/bukkit/GameMode.java
+index 796f75313255ecc8917819b28eaf12776f2e4ce3..207a3fa89872e59a5ec31e305cfef3143d796b95 100644
+--- a/src/main/java/org/bukkit/GameMode.java
++++ b/src/main/java/org/bukkit/GameMode.java
+@@ -1,7 +1,5 @@
+ package org.bukkit;
+ 
+-import com.google.common.collect.Maps;
+-import java.util.Map;
+ import org.bukkit.entity.HumanEntity;
+ import org.jetbrains.annotations.Nullable;
+ 
+@@ -34,7 +32,6 @@ public enum GameMode implements net.kyori.adventure.translation.Translatable { /
+     SPECTATOR(3);
+ 
+     private final int value;
+-    private static final Map<Integer, GameMode> BY_ID = Maps.newHashMap();
+     // Paper start - translation keys
+     private final String translationKey;
+ 
+@@ -71,13 +68,13 @@ public enum GameMode implements net.kyori.adventure.translation.Translatable { /
+     @org.jetbrains.annotations.ApiStatus.Internal // Paper
+     @Nullable
+     public static GameMode getByValue(final int value) {
+-        return BY_ID.get(value);
+-    }
+-
+-    static {
+-        for (GameMode mode : values()) {
+-            BY_ID.put(mode.getValue(), mode);
+-        }
++        return switch (value) {
++            case 0 -> SURVIVAL;
++            case 1 -> CREATIVE;
++            case 2 -> ADVENTURE;
++            case 3 -> SPECTATOR;
++            default -> null;
++        };
+     }
+ 
+     // Paper start - Add GameMode#isInvulnerable
