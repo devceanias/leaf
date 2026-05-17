@@ -13,7 +13,7 @@ public class SoftImmediateRespawn extends ConfigModules {
     @Override
     public void onLoaded() {
         enabled = config.getBoolean(
-            getBasePath() + ".enabled",
+            getBasePath(),
             enabled,
             config.pickStringRegionBased(
                 """
