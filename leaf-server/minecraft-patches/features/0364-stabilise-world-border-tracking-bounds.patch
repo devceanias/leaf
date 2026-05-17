@@ -1,0 +1,209 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Sun, 17 May 2026 16:15:26 +1000
+Subject: [PATCH] stabilise world border tracking bounds
+
+
+diff --git a/net/minecraft/server/level/ServerLevel.java b/net/minecraft/server/level/ServerLevel.java
+index 2df1d9448c88dfe5b4478deee5b00d25508fa085..af7e317f098047aa19f87680b77281e396e36e02 100644
+--- a/net/minecraft/server/level/ServerLevel.java
++++ b/net/minecraft/server/level/ServerLevel.java
+@@ -129,6 +129,7 @@ import net.minecraft.world.level.block.entity.BlockEntity;
+ import net.minecraft.world.level.block.entity.FuelValues;
+ import net.minecraft.world.level.block.entity.TickingBlockEntity;
+ import net.minecraft.world.level.block.state.BlockState;
++import net.minecraft.world.level.border.BorderChangeListener;
+ import net.minecraft.world.level.border.WorldBorder;
+ import net.minecraft.world.level.chunk.ChunkAccess;
+ import net.minecraft.world.level.chunk.ChunkGenerator;
+@@ -236,6 +237,11 @@ public class ServerLevel extends Level implements ServerEntityGetter, WorldGenLe
+     public final org.dreeam.leaf.async.tracker.AsyncTracker leaf$asyncTracker = new org.dreeam.leaf.async.tracker.AsyncTracker(this); // Leaf - Multithreaded tracker
+     private @Nullable WorldBorder worldBorder; // Leaf - Cache world border
+ 
++    private double leaf$trackingBorderMinX = Double.NaN;
++    private double leaf$trackingBorderMaxX = Double.NaN;
++    private double leaf$trackingBorderMinZ = Double.NaN;
++    private double leaf$trackingBorderMaxZ = Double.NaN;
++
+     @Override
+     public @Nullable LevelChunk getChunkIfLoaded(int x, int z) {
+         return this.chunkSource.getChunkAtIfLoadedImmediately(x, z); // Paper - Use getChunkIfLoadedImmediately
+@@ -2598,6 +2604,48 @@ public class ServerLevel extends Level implements ServerEntityGetter, WorldGenLe
+         // Leaf end - Cache world border
+         WorldBorder worldBorder = this.getDataStorage().computeIfAbsent(WorldBorder.TYPE);
+         worldBorder.applyInitialSettings(this.levelData.getGameTime());
++
++        leaf$setTrackingBorder(
++            worldBorder.getCenterX(), worldBorder.getCenterZ(), worldBorder.getSize(), worldBorder.getAbsoluteMaxSize()
++        );
++
++        worldBorder.addListener(new BorderChangeListener() {
++            @Override
++            public void onSetSize(final WorldBorder border, final double size) {
++                ServerLevel.this.leaf$setTrackingBorder(border.getCenterX(), border.getCenterZ(), size, border.getAbsoluteMaxSize());
++            }
++
++            @Override
++            public void onLerpSize(final WorldBorder border, final double oldSize, final double newSize, final long time, final long start) {
++                if (!(newSize > oldSize)) {
++                    return;
++                }
++
++                ServerLevel.this.leaf$setTrackingBorder(border.getCenterX(), border.getCenterZ(), newSize, border.getAbsoluteMaxSize());
++            }
++
++            @Override
++            public void onSetCenter(final WorldBorder border, final double x, final double z) {
++                ServerLevel.this.leaf$setTrackingBorder(x, z, ServerLevel.this.leaf$getBorderSize(), border.getAbsoluteMaxSize());
++            }
++
++            @Override
++            public void onSetWarningTime(final WorldBorder border, final int warningTime) {
++            }
++
++            @Override
++            public void onSetWarningBlocks(final WorldBorder border, final int warningBlocks) {
++            }
++
++            @Override
++            public void onSetDamagePerBlock(final WorldBorder border, final double damagePerBlock) {
++            }
++
++            @Override
++            public void onSetSafeZone(final WorldBorder border, final double safeZone) {
++            }
++        });
++
+         this.worldBorder = worldBorder; // Leaf - Cache world border
+         return worldBorder;
+     }
+@@ -2608,15 +2656,15 @@ public class ServerLevel extends Level implements ServerEntityGetter, WorldGenLe
+             return true;
+         }
+ 
+-        final WorldBorder worldBorder = getWorldBorder();
++        getWorldBorder();
+ 
+         final int minBlockX = chunkX << 4;
+         final int maxBlockX = minBlockX + 15;
+         final int minBlockZ = chunkZ << 4;
+         final int maxBlockZ = minBlockZ + 15;
+ 
+-        return maxBlockX >= (int) Math.floor(worldBorder.getMinX()) && minBlockX <= (int) Math.ceil(worldBorder.getMaxX()) - 1
+-            && maxBlockZ >= (int) Math.floor(worldBorder.getMinZ()) && minBlockZ <= (int) Math.ceil(worldBorder.getMaxZ()) - 1;
++        return maxBlockX >= (int) Math.floor(leaf$trackingBorderMinX) && minBlockX <= (int) Math.ceil(leaf$trackingBorderMaxX) - 1
++            && maxBlockZ >= (int) Math.floor(leaf$trackingBorderMinZ) && minBlockZ <= (int) Math.ceil(leaf$trackingBorderMaxZ) - 1;
+     }
+ 
+     public final boolean leaf$shouldAccessChunk(final int chunkX, final int chunkZ) {
+@@ -2645,6 +2693,39 @@ public class ServerLevel extends Level implements ServerEntityGetter, WorldGenLe
+         return false;
+     }
+ 
++    private void leaf$setTrackingBorder(
++        final double centerX, final double centerZ, final double size, final int absoluteMaxSize
++    ) {
++        final double radius = size / 2.0;
++
++        leaf$trackingBorderMinX = Mth.clamp(centerX - radius, -absoluteMaxSize, absoluteMaxSize);
++        leaf$trackingBorderMaxX = Mth.clamp(centerX + radius, -absoluteMaxSize, absoluteMaxSize);
++        leaf$trackingBorderMinZ = Mth.clamp(centerZ - radius, -absoluteMaxSize, absoluteMaxSize);
++        leaf$trackingBorderMaxZ = Mth.clamp(centerZ + radius, -absoluteMaxSize, absoluteMaxSize);
++    }
++
++    private double leaf$getBorderSize() {
++        if (Double.isNaN(leaf$trackingBorderMinX)) {
++            return getWorldBorder().getSize();
++        }
++
++        return leaf$trackingBorderMaxX - leaf$trackingBorderMinX;
++    }
++
++    public final Vec3 clampToBorder(final double x, final double y, final double z) {
++        if (!galeConfig().smallOptimizations.loadChunks.preventTrackingOutsideWorldBorder) {
++            return new Vec3(x, y, z);
++        }
++
++        getWorldBorder();
++
++        return new Vec3(
++            Mth.clamp(x, leaf$trackingBorderMinX, leaf$trackingBorderMaxX - 1.0E-5F),
++            y,
++            Mth.clamp(z, leaf$trackingBorderMinZ, leaf$trackingBorderMaxZ - 1.0E-5F)
++        );
++    }
++
+     // Leaf end - Do not track chunks outside the world border
+ 
+     @Override
+diff --git a/net/minecraft/server/level/ServerPlayer.java b/net/minecraft/server/level/ServerPlayer.java
+index 63860d6d857330b416a389d49838c4efd35eb17f..44204d7a9c3684bfc531f423bc3e14eeeec2e437 100644
+--- a/net/minecraft/server/level/ServerPlayer.java
++++ b/net/minecraft/server/level/ServerPlayer.java
+@@ -1687,6 +1687,24 @@ public class ServerPlayer extends Player implements ca.spottedleaf.moonrise.patc
+                     teleportTransition.cause());
+             }
+ 
++            final Vec3 clamped = level.clampToBorder(
++                teleportTransition.position().x, teleportTransition.position().y, teleportTransition.position().z
++            );
++
++            if (clamped.x != teleportTransition.position().x || clamped.z != teleportTransition.position().z) {
++                teleportTransition = new TeleportTransition(
++                    level,
++                    clamped,
++                    teleportTransition.deltaMovement(),
++                    teleportTransition.yRot(),
++                    teleportTransition.xRot(),
++                    teleportTransition.missingRespawnBlock(),
++                    teleportTransition.asPassenger(),
++                    teleportTransition.relatives(),
++                    teleportTransition.postTeleportTransition(),
++                    teleportTransition.cause()
++                );
++            }
+             // CraftBukkit end
+             if (!teleportTransition.asPassenger()) {
+                 this.removeVehicle();
+diff --git a/net/minecraft/server/network/ServerGamePacketListenerImpl.java b/net/minecraft/server/network/ServerGamePacketListenerImpl.java
+index bb8e5446a744176f90f285b5a563aed74ecc16a5..090f1046295b88fc77adfc87d25cae7c5bc469b2 100644
+--- a/net/minecraft/server/network/ServerGamePacketListenerImpl.java
++++ b/net/minecraft/server/network/ServerGamePacketListenerImpl.java
+@@ -213,7 +213,6 @@ import net.minecraft.world.phys.shapes.Shapes;
+ import net.minecraft.world.phys.shapes.VoxelShape;
+ import org.dreeam.leaf.config.modules.fixes.FixRightClickOffhandCooldown;
+ import org.dreeam.leaf.config.modules.misc.DisableServerDebug;
+-import org.dreeam.leaf.config.modules.network.ChatMessageSignature;
+ import org.dreeam.leaf.config.modules.network.DisableChatKick;
+ import org.jspecify.annotations.Nullable;
+ import org.slf4j.Logger;
+@@ -1503,6 +1502,15 @@ public class ServerGamePacketListenerImpl
+                         double d = clampHorizontal(packet.getX(this.player.getX())); final double toX = d; // Paper - OBFHELPER
+                         double d1 = clampVertical(packet.getY(this.player.getY())); final double toY = d1; // Paper - OBFHELPER
+                         double d2 = clampHorizontal(packet.getZ(this.player.getZ())); final double toZ = d2; // Paper - OBFHELPER
++
++                        final Vec3 clamped = serverLevel.clampToBorder(d, d1, d2);
++
++                        if (clamped.x != d || clamped.z != d2) {
++                            internalTeleport(new PositionMoveRotation(clamped, Vec3.ZERO, f, f1), Collections.emptySet());
++
++                            return;
++                        }
++
+                         if (this.player.isPassenger()) {
+                             this.player.absSnapTo(this.player.getX(), this.player.getY(), this.player.getZ(), f, f1);
+                             this.player.level().getChunkSource().move(this.player);
+@@ -1941,6 +1949,13 @@ public class ServerGamePacketListenerImpl
+             posMoveRotation = new PositionMoveRotation(CraftLocation.toVec3(to), Vec3.ZERO, to.getYaw(), to.getPitch());
+         }
+ 
++        final Vec3 clamped = this.player.level().clampToBorder(posMoveRotation.position().x, posMoveRotation.position().y, posMoveRotation.position().z);
++
++        if (clamped.x != posMoveRotation.position().x || clamped.z != posMoveRotation.position().z) {
++            posMoveRotation = new PositionMoveRotation(clamped, posMoveRotation.deltaMovement(), posMoveRotation.yRot(), posMoveRotation.xRot());
++            relatives = Set.of();
++        }
++
+         this.internalTeleport(posMoveRotation, relatives);
+         return !event.isCancelled(); // CraftBukkit - Return event status
+     }
