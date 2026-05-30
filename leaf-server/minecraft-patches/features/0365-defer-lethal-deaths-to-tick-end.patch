@@ -1,0 +1,62 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Sat, 30 May 2026 17:19:40 +1000
+Subject: [PATCH] defer lethal deaths to tick end
+
+
+diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/MinecraftServer.java
+index 0ec30a26787ed8aef69cdf2f563672455928a2ee..29f9dc4ad6b209db8b929ff8f4572642f86e4a70 100644
+--- a/net/minecraft/server/MinecraftServer.java
++++ b/net/minecraft/server/MinecraftServer.java
+@@ -136,6 +136,7 @@ import net.minecraft.util.profiling.metrics.profiling.MetricsRecorder;
+ import net.minecraft.util.profiling.metrics.profiling.ServerMetricsSamplersProvider;
+ import net.minecraft.util.profiling.metrics.storage.MetricsPersister;
+ import net.minecraft.util.thread.ReentrantBlockableEventLoop;
++import org.dreeam.leaf.util.PendingDeaths;
+ import net.minecraft.world.Difficulty;
+ import net.minecraft.world.Stopwatches;
+ import net.minecraft.world.entity.ai.village.VillageSiege;
+@@ -1781,6 +1782,9 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+             throw new RuntimeException("Chunk system crash propagated to tick()", crash);
+         }
+         // Paper end - rewrite chunk system
++
++        PendingDeaths.process();
++
+         this.tickFrame.end();
+         this.recordEndOfTick(); // Paper - improve tick loop
+         profilerFiller.pop();
+diff --git a/net/minecraft/world/entity/LivingEntity.java b/net/minecraft/world/entity/LivingEntity.java
+index 8b030ca36899f90db785911c1e499dd42109ad95..11fc72433084e435cd28a7e445b98d91826cffe5 100644
+--- a/net/minecraft/world/entity/LivingEntity.java
++++ b/net/minecraft/world/entity/LivingEntity.java
+@@ -158,6 +158,7 @@ import org.bukkit.event.entity.EntityDamageEvent.DamageModifier;
+ import org.bukkit.event.entity.EntityPotionEffectEvent;
+ import org.bukkit.event.entity.EntityRegainHealthEvent;
+ import org.bukkit.event.entity.EntityResurrectEvent;
++import org.dreeam.leaf.util.PendingDeaths;
+ // CraftBukkit end
+ 
+ public abstract class LivingEntity extends Entity implements Attackable, WaypointTransmitter, net.caffeinemc.mods.lithium.common.world.in_world_tracking.MaybeInLevelObject { // Leaf - Lithium - equipment tracking
+@@ -1698,6 +1699,10 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+ 
+             if (this.isDeadOrDying()) {
+                 if (!this.checkTotemDeathProtection(damageSource)) {
++                    if (this instanceof final ServerPlayer serverPlayer && PendingDeaths.defer(serverPlayer, damageSource)) {
++                        return !flag;
++                    }
++
+                     // Paper start - moved into CraftEventFactory event caller for cancellable death event
+                     this.silentDeath = !flag1; // mark entity as dying silently
+                     // Paper end
+@@ -1963,6 +1968,10 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+         }
+     }
+ 
++    public final boolean leaf$tryUseDeathProtection(final DamageSource source) {
++        return checkTotemDeathProtection(source);
++    }
++
+     public @Nullable DamageSource getLastDamageSource() {
+         if (this.level().getGameTime() - this.lastDamageStamp > 40L) {
+             this.lastDamageSource = null;
