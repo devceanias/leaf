@@ -1,0 +1,55 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Sat, 30 May 2026 23:10:17 +1000
+Subject: [PATCH] improve shield stun path
+
+
+diff --git a/net/minecraft/world/entity/LivingEntity.java b/net/minecraft/world/entity/LivingEntity.java
+index 11fc72433084e435cd28a7e445b98d91826cffe5..57557e322c1313409a1c19c60e72fadab04f176f 100644
+--- a/net/minecraft/world/entity/LivingEntity.java
++++ b/net/minecraft/world/entity/LivingEntity.java
+@@ -46,9 +46,11 @@ import net.minecraft.nbt.NbtOps;
+ import net.minecraft.network.protocol.game.ClientboundAddEntityPacket;
+ import net.minecraft.network.protocol.game.ClientboundAnimatePacket;
+ import net.minecraft.network.protocol.game.ClientboundEntityEventPacket;
++import net.minecraft.network.protocol.game.ClientboundEntityPositionSyncPacket;
+ import net.minecraft.network.protocol.game.ClientboundRemoveMobEffectPacket;
+ import net.minecraft.network.protocol.game.ClientboundSetEquipmentPacket;
+ import net.minecraft.network.protocol.game.ClientboundSetHealthPacket;
++import net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket;
+ import net.minecraft.network.protocol.game.ClientboundTakeItemEntityPacket;
+ import net.minecraft.network.protocol.game.ClientboundUpdateMobEffectPacket;
+ import net.minecraft.network.syncher.EntityDataAccessor;
+@@ -143,6 +145,7 @@ import net.minecraft.world.scores.PlayerTeam;
+ import net.minecraft.world.scores.Scoreboard;
+ import net.minecraft.world.waypoints.Waypoint;
+ import net.minecraft.world.waypoints.WaypointTransmitter;
++import org.dreeam.leaf.config.modules.gameplay.Knockback;
+ import org.dreeam.leaf.config.modules.gameplay.SoftImmediateRespawn;
+ import org.dreeam.leaf.config.modules.opt.ReduceTotemGhosting;
+ import org.jetbrains.annotations.Contract;
+@@ -1888,7 +1891,24 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+     }
+ 
+     protected void blockedByItem(LivingEntity entity) {
++        final Vec3 current = entity.getDeltaMovement();
++
+         entity.knockback(0.5, entity.getX() - this.getX(), entity.getZ() - this.getZ(), this, io.papermc.paper.event.entity.EntityKnockbackEvent.Cause.SHIELD_BLOCK); // CraftBukkit // Paper - fix attacker & knockback events
++
++        if (!(entity instanceof final ServerPlayer target) || !entity.hurtMarked) {
++            return;
++        }
++
++        if (Knockback.flushKnockback && this instanceof final ServerPlayer blocker) {
++            target.connection.send(ClientboundEntityPositionSyncPacket.of(this));
++            blocker.connection.send(new ClientboundSetEntityMotionPacket(target));
++            blocker.connection.send(ClientboundEntityPositionSyncPacket.of(target));
++        }
++
++        target.connection.send(new ClientboundSetEntityMotionPacket(target));
++
++        entity.hurtMarked = false;
++        entity.setDeltaMovement(current);
+     }
+ 
+     private boolean checkTotemDeathProtection(DamageSource damageSource) {
