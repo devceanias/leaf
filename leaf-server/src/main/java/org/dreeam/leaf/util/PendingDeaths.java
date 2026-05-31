@@ -56,6 +56,7 @@ public final class PendingDeaths {
                 continue;
             }
 
+            player.setHealth(0.0F);
             player.die(source);
         }
     }
