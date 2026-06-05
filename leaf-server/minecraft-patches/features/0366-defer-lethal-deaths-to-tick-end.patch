@@ -27,10 +27,10 @@ index 0ec30a26787ed8aef69cdf2f563672455928a2ee..29f9dc4ad6b209db8b929ff8f4572642
          this.recordEndOfTick(); // Paper - improve tick loop
          profilerFiller.pop();
 diff --git a/net/minecraft/world/entity/LivingEntity.java b/net/minecraft/world/entity/LivingEntity.java
-index 8b030ca36899f90db785911c1e499dd42109ad95..11fc72433084e435cd28a7e445b98d91826cffe5 100644
+index 50325230fdd5b94c0c3b479b79c8b9bc3d80e0ba..57557e322c1313409a1c19c60e72fadab04f176f 100644
 --- a/net/minecraft/world/entity/LivingEntity.java
 +++ b/net/minecraft/world/entity/LivingEntity.java
-@@ -158,6 +158,7 @@ import org.bukkit.event.entity.EntityDamageEvent.DamageModifier;
+@@ -161,6 +161,7 @@ import org.bukkit.event.entity.EntityDamageEvent.DamageModifier;
  import org.bukkit.event.entity.EntityPotionEffectEvent;
  import org.bukkit.event.entity.EntityRegainHealthEvent;
  import org.bukkit.event.entity.EntityResurrectEvent;
@@ -38,7 +38,7 @@ index 8b030ca36899f90db785911c1e499dd42109ad95..11fc72433084e435cd28a7e445b98d91
  // CraftBukkit end
  
  public abstract class LivingEntity extends Entity implements Attackable, WaypointTransmitter, net.caffeinemc.mods.lithium.common.world.in_world_tracking.MaybeInLevelObject { // Leaf - Lithium - equipment tracking
-@@ -1698,6 +1699,10 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+@@ -1701,6 +1702,10 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
  
              if (this.isDeadOrDying()) {
                  if (!this.checkTotemDeathProtection(damageSource)) {
@@ -49,7 +49,7 @@ index 8b030ca36899f90db785911c1e499dd42109ad95..11fc72433084e435cd28a7e445b98d91
                      // Paper start - moved into CraftEventFactory event caller for cancellable death event
                      this.silentDeath = !flag1; // mark entity as dying silently
                      // Paper end
-@@ -1963,6 +1968,10 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+@@ -1983,6 +1988,10 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
          }
      }
  

@@ -5,7 +5,7 @@ Subject: [PATCH] improve shield stun path
 
 
 diff --git a/net/minecraft/world/entity/LivingEntity.java b/net/minecraft/world/entity/LivingEntity.java
-index 11fc72433084e435cd28a7e445b98d91826cffe5..57557e322c1313409a1c19c60e72fadab04f176f 100644
+index 8b030ca36899f90db785911c1e499dd42109ad95..50325230fdd5b94c0c3b479b79c8b9bc3d80e0ba 100644
 --- a/net/minecraft/world/entity/LivingEntity.java
 +++ b/net/minecraft/world/entity/LivingEntity.java
 @@ -46,9 +46,11 @@ import net.minecraft.nbt.NbtOps;
@@ -28,7 +28,7 @@ index 11fc72433084e435cd28a7e445b98d91826cffe5..57557e322c1313409a1c19c60e72fada
  import org.dreeam.leaf.config.modules.gameplay.SoftImmediateRespawn;
  import org.dreeam.leaf.config.modules.opt.ReduceTotemGhosting;
  import org.jetbrains.annotations.Contract;
-@@ -1888,7 +1891,24 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+@@ -1883,7 +1886,24 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
      }
  
      protected void blockedByItem(LivingEntity entity) {
