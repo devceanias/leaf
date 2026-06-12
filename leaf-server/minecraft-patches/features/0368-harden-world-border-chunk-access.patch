@@ -83,3 +83,103 @@ index 665c7e3df07aa16f5edc3c715391e0467c8abf61..a64806a029f356d0c0c3dfebd8f36349
              );
          }
  
+diff --git a/net/minecraft/server/network/ServerGamePacketListenerImpl.java b/net/minecraft/server/network/ServerGamePacketListenerImpl.java
+index 090f1046295b88fc77adfc87d25cae7c5bc469b2..82b39c29143a95b5059f9037aca8d36dfec08b50 100644
+--- a/net/minecraft/server/network/ServerGamePacketListenerImpl.java
++++ b/net/minecraft/server/network/ServerGamePacketListenerImpl.java
+@@ -35,11 +35,7 @@ import net.minecraft.commands.CommandSigningContext;
+ import net.minecraft.commands.CommandSourceStack;
+ import net.minecraft.commands.Commands;
+ import net.minecraft.commands.arguments.ArgumentSignatures;
+-import net.minecraft.core.BlockPos;
+-import net.minecraft.core.Direction;
+-import net.minecraft.core.Holder;
+-import net.minecraft.core.Registry;
+-import net.minecraft.core.Vec3i;
++import net.minecraft.core.*;
+ import net.minecraft.core.component.DataComponents;
+ import net.minecraft.core.registries.Registries;
+ import net.minecraft.gametest.framework.GameTestInstance;
+@@ -190,6 +186,7 @@ import net.minecraft.world.level.BaseCommandBlock;
+ import net.minecraft.world.level.GameType;
+ import net.minecraft.world.level.Level;
+ import net.minecraft.world.level.LevelReader;
++import net.minecraft.world.level.chunk.status.ChunkStatus;
+ import net.minecraft.world.level.block.Block;
+ import net.minecraft.world.level.block.Blocks;
+ import net.minecraft.world.level.block.CommandBlock;
+@@ -787,14 +784,35 @@ public class ServerGamePacketListenerImpl
+                 return;
+             }
+ 
+-            this.player
+-                .absSnapTo(
+-                    this.awaitingPositionFromClient.x,
+-                    this.awaitingPositionFromClient.y,
+-                    this.awaitingPositionFromClient.z,
+-                    this.player.getYRot(),
+-                    this.player.getXRot()
++            try {
++                player
++                    .absSnapTo(
++                        awaitingPositionFromClient.x,
++                        awaitingPositionFromClient.y,
++                        awaitingPositionFromClient.z,
++                        player.getYRot(),
++                        player.getXRot()
++                    );
++            } catch (final IllegalStateException exception) {
++                LOGGER.warn(
++                    "Rejecting teleport acknowledge for {} because destination chunk is unavailable at ({}, {}, {})",
++                    player.getScoreboardName(),
++                    awaitingPositionFromClient.x,
++                    awaitingPositionFromClient.y,
++                    awaitingPositionFromClient.z,
++                    exception
+                 );
++
++                player.absSnapTo(lastGoodX, lastGoodY, lastGoodZ, player.getYRot(), player.getXRot());
++
++                awaitingPositionFromClient = null;
++                awaitingTeleport = 0;
++
++                player.level().getChunkSource().move(player);
++
++                return;
++            }
++
+             this.lastGoodX = this.awaitingPositionFromClient.x;
+             this.lastGoodY = this.awaitingPositionFromClient.y;
+             this.lastGoodZ = this.awaitingPositionFromClient.z;
+@@ -1984,6 +2002,31 @@ public class ServerGamePacketListenerImpl
+             posMoveRotation = new PositionMoveRotation(posMoveRotation.position(), posMoveRotation.deltaMovement(), posMoveRotation.yRot(), 0);
+         }
+ 
++        final PositionMoveRotation absolutePosition = PositionMoveRotation.calculateAbsolute(
++            PositionMoveRotation.of(this.player),
++            posMoveRotation,
++            relatives
++        );
++
++        final int chunkX = SectionPos.blockToSectionCoord(Mth.floor(absolutePosition.position().x));
++        final int chunkZ = SectionPos.blockToSectionCoord(Mth.floor(absolutePosition.position().z));
++
++        try {
++            player.level().getChunkSource().getChunk(chunkX, chunkZ, ChunkStatus.FULL, true);
++        } catch (final IllegalStateException exception) {
++            LOGGER.warn(
++                "Rejecting teleport for {} because destination chunk is unavailable at ({}, {}, {}) in world {}",
++                player.getScoreboardName(),
++                absolutePosition.position().x,
++                absolutePosition.position().y,
++                absolutePosition.position().z,
++                player.level().getWorld().getName(),
++                exception
++            );
++
++            return;
++        }
++
+         this.justTeleported = true;
+         // CraftBukkit end
+         this.awaitingTeleportTime = this.tickCount;
