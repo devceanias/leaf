@@ -5,10 +5,38 @@ Subject: [PATCH] harden world border chunk access
 
 
 diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java
-index 7824d3277008830a95d65d2382788942feb0173f..132f6452dc4a4bbacfb5e604991c14cb791a8d44 100644
+index 7824d3277008830a95d65d2382788942feb0173f..3c220e7b230fb31802ab5456273f5335aad3b783 100644
 --- a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java
 +++ b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java
-@@ -1103,7 +1103,12 @@ public final class ChunkHolderManager {
+@@ -1049,7 +1049,12 @@ public final class ChunkHolderManager {
+         final int chunkZ = CoordinateUtils.getChunkZ(position);
+ 
+         if (!world.leaf$shouldAccessChunk(chunkX, chunkZ)) {
+-            throw new IllegalStateException("Cannot create chunk holder outside the world border: (" + chunkX + "," + chunkZ + ")");
++            LOGGER.warn(
++                "Allowing chunk holder bootstrap outside tracked bounds in world {} at ({}, {})",
++                world.getWorld().getName(),
++                chunkX,
++                chunkZ
++            );
+         }
+ 
+         final NewChunkHolder ret = new NewChunkHolder(this.world, chunkX, chunkZ, this.taskScheduler);
+@@ -1071,7 +1076,12 @@ public final class ChunkHolderManager {
+         final int chunkZ = CoordinateUtils.getChunkZ(position);
+ 
+         if (!world.leaf$shouldAccessChunk(chunkX, chunkZ)) {
+-            throw new IllegalStateException("Cannot create chunk holder outside the world border: (" + chunkX + "," + chunkZ + ")");
++            LOGGER.warn(
++                "Allowing chunk holder creation outside tracked bounds in world {} at ({}, {})",
++                world.getWorld().getName(),
++                chunkX,
++                chunkZ
++            );
+         }
+ 
+         if (!this.ticketLockArea.isHeldByCurrentThread(chunkX, chunkZ)) {
+@@ -1103,7 +1113,12 @@ public final class ChunkHolderManager {
          }
  
          if (!world.leaf$shouldAccessChunk(chunkX, chunkZ)) {
@@ -22,3 +50,36 @@ index 7824d3277008830a95d65d2382788942feb0173f..132f6452dc4a4bbacfb5e604991c14cb
          }
  
          ChunkEntitySlices ret;
+@@ -1191,7 +1206,12 @@ public final class ChunkHolderManager {
+         }
+ 
+         if (!world.leaf$shouldAccessChunk(chunkX, chunkZ)) {
+-            throw new IllegalStateException("Cannot create poi chunk outside the world border: (" + chunkX + "," + chunkZ + ")");
++            LOGGER.warn(
++                "Allowing poi chunk creation outside tracked bounds in world {} at ({}, {})",
++                world.getWorld().getName(),
++                chunkX,
++                chunkZ
++            );
+         }
+ 
+         PoiChunk ret;
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkTaskScheduler.java b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkTaskScheduler.java
+index 665c7e3df07aa16f5edc3c715391e0467c8abf61..a64806a029f356d0c0c3dfebd8f3634900a3d304 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkTaskScheduler.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkTaskScheduler.java
+@@ -615,8 +615,12 @@ public final class ChunkTaskScheduler {
+         }
+ 
+         if (!world.leaf$shouldAccessChunk(chunkX, chunkZ)) {
+-            throw new IllegalStateException(
+-                "Cannot sync load chunk outside the world border: (" + chunkX + "," + chunkZ + ") status: " + status
++            LOGGER.warn(
++                "Allowing sync chunk load outside tracked bounds in world {} at ({}, {}) status {}",
++                this.world.getWorld().getName(),
++                chunkX,
++                chunkZ,
++                status
+             );
+         }
+ 
