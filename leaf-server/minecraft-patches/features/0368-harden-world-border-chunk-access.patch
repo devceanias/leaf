@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: plantball <mythicalplanetdude@gmail.com>
+Date: Sat, 13 Jun 2026 00:56:19 +1000
+Subject: [PATCH] harden world border chunk access
+
+
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java
+index 7824d3277008830a95d65d2382788942feb0173f..c2ef9311ad40aed8f7c9e46dcebd755a150037f3 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java
+@@ -1103,7 +1103,18 @@ public final class ChunkHolderManager {
+         }
+ 
+         if (!world.leaf$shouldAccessChunk(chunkX, chunkZ)) {
+-            throw new IllegalStateException("Cannot create entity chunk outside the world border: (" + chunkX + "," + chunkZ + ")");
++            final ChunkPos pos = new ChunkPos(chunkX, chunkZ);
++
++            if (!world.getWorldBorder().isWithinBounds(pos)) {
++                throw new IllegalStateException("Cannot create entity chunk outside the world border: (" + chunkX + "," + chunkZ + ")");
++            }
++
++            LOGGER.warn(
++                "Allowing entity chunk creation inside the live world border but outside tracked bounds in world {} at ({}, {})",
++                world.getWorld().getName(),
++                chunkX,
++                chunkZ
++            );
+         }
+ 
+         ChunkEntitySlices ret;
+diff --git a/net/minecraft/server/network/ServerGamePacketListenerImpl.java b/net/minecraft/server/network/ServerGamePacketListenerImpl.java
+index 090f1046295b88fc77adfc87d25cae7c5bc469b2..6ad2573fa96ecff7cd571fe695621397662cbb14 100644
+--- a/net/minecraft/server/network/ServerGamePacketListenerImpl.java
++++ b/net/minecraft/server/network/ServerGamePacketListenerImpl.java
+@@ -1984,6 +1984,17 @@ public class ServerGamePacketListenerImpl
+             posMoveRotation = new PositionMoveRotation(posMoveRotation.position(), posMoveRotation.deltaMovement(), posMoveRotation.yRot(), 0);
+         }
+ 
++        final Vec3 clamped = player.level().clampToBorder(
++            posMoveRotation.position().x,
++            posMoveRotation.position().y,
++            posMoveRotation.position().z
++        );
++
++        if (clamped.x != posMoveRotation.position().x || clamped.z != posMoveRotation.position().z) {
++            posMoveRotation = new PositionMoveRotation(clamped, posMoveRotation.deltaMovement(), posMoveRotation.yRot(), posMoveRotation.xRot());
++            relatives = Collections.emptySet();
++        }
++
+         this.justTeleported = true;
+         // CraftBukkit end
+         this.awaitingTeleportTime = this.tickCount;
